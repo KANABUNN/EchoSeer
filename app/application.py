@@ -47,12 +47,17 @@ def main(argv: list[str] | None = None) -> int:
     logger.info("Starting Oracle Assistant %s; Python %s", __version__, sys.version.split()[0])
     if manager.last_warning:
         logger.warning("%s; backup=%s", manager.last_warning, manager.last_backup)
-    window = MainWindow(paths.root, "\n".join(warnings) if warnings else None)
+    window = MainWindow(
+        paths.root, "\n".join(warnings) if warnings else None,
+        settings=settings, config_manager=manager,
+    )
     window.show()
     if args.smoke_test:
         QTimer.singleShot(750, window.close)
     try:
         return qt_app.exec()
     finally:
+        if not window.controller.shutdown(timeout=5):
+            logger.error("Audio worker did not shut down")
         logger.info("Oracle Assistant stopped")
         close_logging()

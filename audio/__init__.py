@@ -1,1 +1,1 @@
-"""Audio capture, devices, and buffers; reserved for Phase 1."""
+"""Qt-independent Windows audio capture and native-format buffers."""
