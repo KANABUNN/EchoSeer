@@ -1,7 +1,8 @@
 """Bounded, thread-safe native-format audio storage, measured in frames."""
 
 import math
-from threading import Lock
+from pathlib import Path
+from threading import Event, Lock
 
 import numpy as np
 from numpy.typing import NDArray
@@ -65,3 +66,16 @@ class RingBuffer:
             if first < count:
                 output[first:] = self._data[:count - first]
             return output
+
+
+    def dump(
+        self, path: Path | str, frames: int | None = None, encoding: str = "float32",
+        cancel: Event | None = None,
+    ) -> Path:
+        """Copy under the ring lock, then write outside the capture critical section."""
+        from audio.data import AudioClip
+        from audio.operations import check_cancel
+        from audio.waveio import write_wav
+        check_cancel(cancel)
+        clip = AudioClip(self.snapshot(frames), self.sample_rate)
+        return write_wav(path, clip, encoding, cancel)

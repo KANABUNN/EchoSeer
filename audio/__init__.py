@@ -1,1 +1,1 @@
-"""Qt-independent Windows audio capture and native-format buffers."""
+"""Qt-independent capture, WAV input/output, sources and native-format buffers."""

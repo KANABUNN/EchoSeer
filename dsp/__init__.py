@@ -1,1 +1,1 @@
-"""Qt-independent preprocessing and features; reserved for later phases."""
+"""Qt-independent deterministic preprocessing; feature extraction follows later."""

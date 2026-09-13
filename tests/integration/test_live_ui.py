@@ -50,6 +50,7 @@ def cleanup(window: MainWindow, factory: AudioFactory) -> None:
     if factory.open_gate:
         factory.open_gate.set()
     assert window.controller.shutdown(2)
+    assert window.operations.shutdown(2)
     window.close()
     QApplication.processEvents()
     assert not window.controller.service.is_alive

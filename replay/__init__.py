@@ -1,1 +1,1 @@
-"""Shared-analyzer replay and evaluation; reserved for later phases."""
+"""Shared audio Analyzer for Live snapshots and repeatable WAV replay."""

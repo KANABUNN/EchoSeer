@@ -16,6 +16,8 @@ ACTIVE_STATES = {"STARTING", "LIVE", "DEVICE_LOST", "RECONNECTING"}
 
 
 class LivePage(QWidget):
+    replay_requested = Signal()
+    dump_requested = Signal()
     start_requested = Signal(object)
     stop_requested = Signal()
     refresh_requested = Signal()
@@ -24,8 +26,10 @@ class LivePage(QWidget):
 
     def __init__(self, settings: AudioSettings, parent: QWidget | None = None) -> None:
         super().__init__(parent)
-        self.setMinimumHeight(540)
+        self.setMinimumHeight(600)
         self.settings = settings
+        self._buffer_available = False
+        self._operation_busy = False
         self._catalog: DeviceCatalog | None = None
         self._state = "STOPPED"
         self._status_message = ""
@@ -80,6 +84,13 @@ class LivePage(QWidget):
         self.message_label.setObjectName("audioMessage")
         self.message_label.setWordWrap(True)
         grid.addWidget(self.message_label, 4, 0, 1, 3)
+        snapshot_row = QHBoxLayout()
+        self.replay_button = QPushButton("直近音声を Replay へ")
+        self.dump_button = QPushButton("直近音声を WAV 保存")
+        snapshot_row.addWidget(self.replay_button)
+        snapshot_row.addWidget(self.dump_button)
+        snapshot_row.addStretch()
+        grid.addLayout(snapshot_row, 5, 0, 1, 3)
         layout.addWidget(audio_group)
 
         meter_group = QGroupBox("Audio Level")
@@ -120,6 +131,16 @@ class LivePage(QWidget):
         self.start_button.clicked.connect(self._start)
         self.stop_button.clicked.connect(self.stop_requested)
         self.refresh_button.clicked.connect(self.refresh_requested)
+        self.replay_button.clicked.connect(self.replay_requested)
+        self.dump_button.clicked.connect(self.dump_requested)
+        self._update_controls()
+
+    def set_buffer_available(self, available: bool) -> None:
+        self._buffer_available = available
+        self._update_controls()
+
+    def set_operation_busy(self, busy: bool) -> None:
+        self._operation_busy = busy
         self._update_controls()
 
     @property
@@ -195,6 +216,9 @@ class LivePage(QWidget):
         self.backend_combo.setEnabled(idle)
         self.device_combo.setEnabled(idle)
         self.refresh_button.setEnabled(idle)
+        snapshot_enabled = self._buffer_available and not self._operation_busy
+        self.replay_button.setEnabled(snapshot_enabled)
+        self.dump_button.setEnabled(snapshot_enabled)
 
     def _update_message(self) -> None:
         self.message_label.setText(self._selection_problem or self._status_message)

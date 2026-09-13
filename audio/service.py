@@ -141,13 +141,25 @@ class CaptureService:
         logger.info("Audio LIVE: %s / %s, %s Hz, %s channels", device.host_api, device.name, device.sample_rate, device.channels)
         self._publish(CaptureStatus("LIVE", "音声を取得しています。", device))
 
+    def _silent_level(self) -> AudioLevel:
+        ring = self.buffer
+        stats = self._session.stats() if self._session is not None else None
+        return measure_level(
+            np.empty((0, 1), dtype=np.float32),
+            ring.duration_seconds if ring is not None else 0,
+            stats.received_frames if stats is not None else 0,
+            stats.dropped_frames if stats is not None else 0,
+            stats.overflow_count if stats is not None else 0,
+        )
+
     def _handle(self, command: str, device: AudioDevice | None) -> None:
         if command == "stop":
             self._target = None
             self._publish(CaptureStatus("STOPPING"))
+            silent = self._silent_level()
             self._stop_session()
             self._close_interface()
-            self._publish(measure_level(np.empty((0, 1), dtype=np.float32)))
+            self._publish(silent)
             self._publish(CaptureStatus("STOPPED", "音声取得を停止しました。"))
         elif command == "refresh":
             if self._session is not None or self._target is not None:
@@ -166,11 +178,12 @@ class CaptureService:
                 self._begin(resolve_device(catalog.devices, device.identity()))
 
     def _lost(self, reason: str) -> None:
+        silent = self._silent_level()
         self._stop_session()
         self._close_interface()
         self._next_retry = time.monotonic() + self._retry_seconds
         logger.warning("Audio device lost: %s", reason)
-        self._publish(measure_level(np.empty((0, 1), dtype=np.float32)))
+        self._publish(silent)
         self._publish(CaptureStatus(
             "DEVICE_LOST", "Audio device lost：音声入力が停止しました。再接続を試みます。",
         ))

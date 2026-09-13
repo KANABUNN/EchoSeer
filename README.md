@@ -3,10 +3,10 @@
 Vault of Glass のゲーム音声からオラクルを識別し、順序と信頼度を表示する
 Windows アプリケーションを、指示書の Phase 順に開発しています。
 
-**Phase 1（音声取得）まで実装済みです。**
+**Phase 2（Replay / 音声基盤）まで実装済みです。**
 WASAPI Loopback / 通常録音入力の選択、Start / Stop、リアルタイム音量表示、
-リングバッファ、設定保存・復旧、診断ログが動作します。
-オラクル認識、Calibration、WAV Replay、Overlay、配布 EXE は後続 Phase で実装します。
+リングバッファ、WAV 読み書き、共通前処理、簡易 Replay、設定保存・復旧、診断ログが動作します。
+オラクル認識、Calibration、Overlay、配布 EXE は後続 Phase で実装します。
 
 ゲームへの操作送信、メモリ読み取り、DLL 注入、ゲームファイルへのアクセス、
 自動入力、Bungie API、クラウド認識、テレメトリーは実装しません。
@@ -52,7 +52,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\setup.ps1
 5. Stop で停止します。停止後にデバイス変更・再検索ができます。
 
 起動だけでは音声取得を開始しません。
-小さいウィンドウでは Live の内容をスクロールできます。
+小さいウィンドウでは Live / Replay の内容をスクロールできます。
 長いデバイス名は項目にマウスを合わせて確認できます。
 
 ## VoiceMeeter の音を取り込む
@@ -89,12 +89,44 @@ Windows / VoiceMeeter の出力先・音声設定を確認して再検索し、�
 取得した float32 音声をメモリ内のリングバッファへ保持します。
 長さは初期 10 秒、設定で 5～30 秒です。満杯になると古いフレームを置き換えます。
 バッファは入力の native rate / チャンネル数を保持します。
-内部 48000 Hz への変換・モノラル化・正規化・WAV 保存は Phase 2 の作業です。
 
-Phase 1 は音声ファイルや認識イベントを生成しません。
-Stop 後の最後のバッファはメモリ内に残り、次の開始時に置き換えます。
+- 「直近音声を Replay へ」は処理開始時のバッファのコピーを共通 Analyzer へ渡します。
+- 「直近音声を WAV 保存」は元の native 形式を float32 WAV として保存します。
+- Replay で Analyze を押し直すと、取得が進んでも同じコピーを再解析します。
+- Replay の「WAV 保存」は変換済みモノラル音声を保存します。
+
+WAV ファイルは保存操作時だけ生成します。自動のフルセッション録音はありません。
+Stop 後の最後のバッファはメモリ内に残り、次の取得開始時に置き換えます。
 アプリ終了時に破棄されます。
-メーターにはバッファ長、取得欠落・オーバーフロー回数、クリッピングを表示します。
+停止後も保持バッファの長さと保存操作を利用でき、現在の音量メーターはゼロになります。
+取得中はバッファ長、欠落・オーバーフロー回数、クリッピングを表示します。
+
+## Replay / 音声変換（Phase 2）
+
+1. Replay タブの「WAV を開く」でファイルを選びます。
+2. Analyze を押すと、入力音声と解析後のレート・チャンネル・サンプル数・長さ・RMS / Peak を表示します。
+3. 同じ WAV に対して再び Analyze を押すと、サンプル列が前回と一致したことを表示します。
+4. 「WAV 保存」で解析後の音声を任意の場所へ保存できます。float32 または PCM 16 bit を選びます。
+
+共通 Analyzer は、チャンネルの単純平均 → DC 成分除去 →
+内部レートへの SciPy polyphase 変換 → peak 0.95 への正規化を行います。
+内部レートは初期 48000 Hz で、audio.internal_sample_rate の設定を使用します。
+peak が 1e-6 以下の音声はゼロとして扱い、微小ノイズを増幅しません。
+左右が逆位相なら平均により打ち消されます。元の音声は別に保持します。
+
+Live / Replay のどちらも一つの完全な入力区間に前処理を適用します。
+callback の境界ごとに変換・正規化することはありません。
+Live の連続 Oracle 検出や Replay の候補時刻・信頼度表示は後続 Phase の作業です。
+
+読込対応は little-endian RIFF / WAVE の PCM 8 / 16 / 24 / 32 bit、
+IEEE float 32 / 64 bit、および対応 PCM / float の WAVE_FORMAT_EXTENSIBLE です。
+圧縮 WAV・RIFX・RF64 はこの段階では対象外です。
+入力ファイルは 128 MiB 以下、展開後の native 音声と解析後音声はそれぞれ 256 MiB 以下に制限します。
+長い録音は短い区間に分けてください。空・途中で切れたデータや不正な数値には画面で案内します。
+
+ファイルの読み込み・解析・保存は、取得とは別のワーカーで行います。
+再解析に失敗した場合は古い結果の保存を無効にします。
+保存は一時ファイルを書き終えてから置換し、途中の失敗・キャンセルでは既存ファイルを保護します。
 
 ## 設定・ログ保存場所
 
@@ -127,13 +159,13 @@ main.py
 app/             起動処理、保存先
 config/          初期値、schema、設定保存・復旧
 logging_ext/     診断ログ、JSONL イベントログ基盤
-audio/           デバイス列挙・解決、取得、Queue、リングバッファ、音量
-ui/              Live 入力欄、音量表示、Qt Signal/Slot、ダークテーマ
-dsp/             前処理・特徴量（後続 Phase）
+audio/           取得、リングバッファ、WAV 入出力、音声ソース、レート変換
+ui/              Live / Replay、音量表示、Qt Signal/Slot、ファイル処理ワーカー
+dsp/             mono・DC 除去・正規化、特徴量は後続 Phase
 templates/       複数テンプレート管理（Phase 3）
 detector/        検出・分類・信頼度（Phase 4 以降）
 encounter/       遭遇・Pass 判定（Phase 7 以降）
-replay/          WAV 解析・評価（後続 Phase）
+replay/          Live / WAV 共通 Analyzer、評価は後続 Phase
 tests/           Unit / 音声ワーカー / GUI テスト、音声・Dataset 用フォルダー
 scripts/         セットアップ・検証
 build/           配布ビルド用フォルダー
@@ -159,7 +191,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\verify.ps1
 .\.venv\Scripts\python.exe -m pip check
 ```
 
-Python 3.14.6 で **90 passed**、依存関係の確認も成功しています。
+Python 3.14.6 で **153 passed**、依存関係の確認も成功しています。
 自動テストは実デバイス・ゲーム・VoiceMeeter の起動を必要としません。
 GUI は offscreen、音声は実スレッドで動くデバイス代替を用いて確認します。
 
@@ -167,6 +199,9 @@ GUI は offscreen、音声は実スレッドで動くデバイス代替を用い
 VoiceMeeter B1 の 48000 / 44100 Hz ストリーム取得、
 計 15 回の反復 Start / Stop と入力エラー後の再試行を確認しました。
 表示修正後に既定 loopback の Start / Stop を追加で 1 回確認しています。
+Phase 2 では実 loopback を WAV 保存し、Live と Replay の解析列が完全に一致しました。
+録音 WAV を 5 回、PCM16 stereo 44100 Hz WAV を 3 回再解析して一致を確認しています。
+解析後の float32 / PCM16 保存・再読込、破損 WAV の案内・再試行も確認しています。
 実機確認の詳細と制限は [受け入れ確認](docs/acceptance.md) に記載しています。
 VoiceMeeter B1 へのゲーム音経路、物理的な切断・再接続、実 Oracle 認識は未検証です。
 
@@ -177,7 +212,9 @@ VoiceMeeter B1 へのゲーム音経路、物理的な切断・再接続、実 O
 - **設定の警告**: 保存先のアクセス権・空き容量・退避ファイルを確認してください。
 - **LIVE でも無音**: ゲームの出力先、VoiceMeeter のバス、ミュートを確認してください。
 - **デバイスを開始できない**: 再検索し、Windows / VoiceMeeter の音声設定を確認してください。
-- **オラクルを認識しない**: Phase 1 は音声取得までの実装です。
+- **オラクルを認識しない**: Phase 2 は音声基盤までの実装です。
+- **WAV を解析できない**: 対応形式・サイズを確認し、元の音声から再出力してください。
+- **保存できない**: 保存先のアクセス権・空き容量を確認してください。
 - **起動しない / 入力エラー**: --debug の出力と logs/application.log を確認してください。
 
 ## アンインストール
@@ -193,6 +230,8 @@ VoiceMeeter B1 へのゲーム音経路、物理的な切断・再接続、実 O
 
 [PyAudioWPatch](https://github.com/s0d3s/PyAudioWPatch) /
 [PyAudio API](https://people.csail.mit.edu/hubert/pyaudio/docs/) の仕様を確認しました。
+[SciPy WAV](https://docs.scipy.org/doc/scipy/reference/generated/scipy.io.wavfile.read.html) /
+[polyphase resampling](https://docs.scipy.org/doc/scipy/reference/generated/scipy.signal.resample_poly.html)。
 [Prophet](https://github.com/PyrexPi/prophet) は参照先として確認済みで、
 ソース・テンプレート・アセットは転載していません。
 既存 [LICENSE.txt](LICENSE.txt) を適用します。

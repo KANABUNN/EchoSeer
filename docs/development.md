@@ -144,3 +144,86 @@ Oracle 認識、WAV、Calibration、Replay、Overlay、EXE は未実装です。
 
 Phase 2 — WAV 読み書き、resampling、mono化、normalization、
 ring buffer dump、LiveSource / WaveFileSource の共通音声基盤。
+
+## Phase 2 — Replay および音声基盤の実装完了（2026-09-14）
+
+ユーザーの「Phase1の実装を確認した．次に移ってほしい．」に従い Phase 2 を実装しました。
+
+### 実装・変更ファイル
+
+- audio/data.py、operations.py: owned read-only float32 音声区間と協調キャンセル。
+- audio/waveio.py: WAV ヘッダー検証、PCM / IEEE float 読込、atomic float32 / PCM16 保存。
+- audio/resampler.py、dsp/preprocess.py、normalization.py: 共通前処理。
+- audio/sources.py: AudioSource、LiveSource、WaveFileSource、固定コピーを読む ClipSource。
+- audio/ring_buffer.py: snapshot をロック内でコピーし、WAV dump はロック外で書く。
+- replay/analyzer.py: native 音声、変換済み音声、level、notice、SHA-256 を返す共通 Analyzer。
+- ui/operation_controller.py、replay_page.py: 別ワーカーのファイル処理・解析、簡易 Replay GUI。
+- ui/live_page.py、main_window.py、app/application.py: Live の保存・Replay 送信、結果表示、両ワーカーの終了。
+- audio/service.py: Stop / device lost 後も保持バッファの長さを正しく表示する。
+- audio/、dsp/、replay/ の __init__.py 説明、tests/unit/test_waveio.py、test_preprocess.py、
+  tests/integration/test_replay_ui.py、既存 GUI テストの cleanup、README と受け入れ記録。
+
+### 前処理と保存の境界
+
+mono は全チャンネルの単純平均。完全な入力区間ごとに DC 平均を除去し、
+SciPy resample_poly の Kaiser 5.0 / zero padding を使って設定された内部レートへ変換します。
+最後に peak 0.95 に正規化します。peak 1e-6 以下は無音とし、微小音を増幅しません。
+入力の多チャンネル音声は解析結果内へ別に保持します。
+
+LiveSource は現在の直近バッファを一回コピーし、WaveFileSource は WAV を毎回再読込します。
+どちらも同じ Analyzer へ native 音声を渡します。callback 境界で前処理を分割しません。
+Replay へ送った Live の区間は ClipSource として固定され、取得が進んでも再解析に同じ区間を使います。
+連続 Oracle 解析や候補区間抽出は後続 Phase です。
+
+raw ring dump は float32 WAV で rate / channels / samples を保持します。
+解析後の保存は float32（サンプル精度保持）または PCM16（量子化・範囲制限）です。
+保存ボタン操作だけでファイルを生成し、自動セッション録音を始めません。
+
+読込は little-endian RIFF / WAVE の PCM 8 / 16 / 24 / 32 bit、
+float 32 / 64 bit、対応 WAVE_FORMAT_EXTENSIBLE に対応します。
+24 bit の left-justified int32 を正しく振幅変換します。
+圧縮・RIFX・RF64・複数 data チャンクはこの段階では対象外です。
+入力 128 MiB、展開後の native / 解析後それぞれ 256 MiB に制限し、
+空・不整合なヘッダー・途中で切れたフレーム・非有限値を拒否します。
+
+### テストと実機確認
+
+- Python 3.14.6 / SciPy 1.18.1 / PySide6 6.11.2。
+- scripts/verify.ps1: pip check 成功、**153 passed**、exit code 0。
+- Phase 0・1 の 90 件を保持し、Phase 2 の 63 件を追加。
+- WAV 6形式 × 44100 / 48000 Hz × mono / stereo、拡張 PCM、odd 最終チャンクを確認。
+- float32 保存・読込の完全一致、PCM16 の丸め・範囲制限。
+- DC / silence / opposite phase / clipping、44.1 / 48 / 192 kHz の周波数・長さ、
+  downsampling alias 抑制と端数フレームを確認。
+- Live snapshot と raw WAV の共通 Analyzer で sample / hash 完全一致。
+- 保存途中・置換失敗・キャンセルでも既存ファイルを保持し、一時ファイルを除去。
+- GUI の再解析・保存・失敗後の再試行、メインスレッド更新、解析待ち中の取得継続、
+  終了操作が 0.1 秒未満で戻ること、ワーカー解放を確認。
+
+実 Windows / 既定 loopback 48000 Hz / 2 ch を取得し、
+native 29760 フレームの保存・再読込と Live / WAV の解析列を完全一致で確認しました。
+録音 WAV の 5 回、PCM16 stereo 44100 Hz の 3 回の GUI 再解析も一致しています。
+解析後 float32 / PCM16 保存、破損 WAV の案内・正常入力で再試行、
+通常ウィンドウと最小サイズの画像を確認しました。
+最終の Stop 表示修正は別の実機操作で、保持バッファ 0.6 秒とゼロ音量、WAV 保存を再確認しました。
+両ワーカーは終了後に残っていません。
+
+実機検証の音声・画面・レポートは .runtime/phase2-native/ と
+.runtime/phase2-buffer-display/ にあり、Git 対象外です。
+
+### 確認中に整えた点
+
+- 失敗した再解析で古い音声を保存できないよう、解析開始時に結果を無効化した。
+- レート変換による大きな出力も、変換開始前にサイズを確認する。
+- Stop 後の保持バッファ長が 0 と表示される問題を修正。
+- ワーカー継続テストの固定 100 ms 待機は環境の実行順序に左右されたため、
+  フレーム到着を確認する条件待機へ変更した。
+
+### 既知の制限・次の段階
+
+Oracle 分類、テンプレート管理、候補時刻・スコア・信頼度、音声再生、Overlay は未実装です。
+Phase 1 の VoiceMeeter B1 ゲーム音経路・物理再接続・一部 endpoint の取得制限は継続します。
+実戦 WAV による認識精度・長時間負荷の確認は後続 Phase です。
+
+次は Phase 3 — OracleId、複数テンプレート管理、録音 / WAV import、
+metadata、再起動後の保持、削除・再生です。

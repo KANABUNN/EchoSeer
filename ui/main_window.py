@@ -1,21 +1,25 @@
 """Main window with live audio controls and asynchronous clean shutdown."""
 
+from datetime import datetime
 import logging
 from pathlib import Path
 
 from PySide6.QtCore import QTimer, Qt, Slot
 from PySide6.QtGui import QAction, QCloseEvent
-from PySide6.QtWidgets import QLabel, QMainWindow, QScrollArea, QTabWidget, QVBoxLayout, QWidget
+from PySide6.QtWidgets import QFileDialog, QLabel, QMainWindow, QScrollArea, QTabWidget, QVBoxLayout, QWidget
 
 from audio.backend import AudioDevice
 from audio.device_manager import DeviceCatalog
 from audio.level import AudioLevel
 from audio.service import CaptureStatus
+from audio.sources import LiveSource
 from config.manager import ConfigManager
 from config.schema import AppConfig, ConfigValidationError
 from ui.audio_controller import AudioController
 from ui.live_page import LivePage
 from ui.theme import DARK_STYLE
+from ui.operation_controller import OperationController, OperationResult
+from ui.replay_page import ReplayPage
 
 logger = logging.getLogger("oracle_assistant.ui")
 
@@ -25,6 +29,7 @@ class MainWindow(QMainWindow):
         self, data_root: Path, warning: str | None = None,
         settings: AppConfig | None = None, config_manager: ConfigManager | None = None,
         controller: AudioController | None = None,
+        operations: OperationController | None = None,
     ) -> None:
         super().__init__()
         self.data_root = data_root
@@ -32,7 +37,7 @@ class MainWindow(QMainWindow):
         self.config_manager = config_manager or ConfigManager(data_root / "config.json")
         self._closing = False
         self.setWindowTitle("Destiny 2 · Oracle Assistant")
-        self.resize(1024, 760)
+        self.resize(1024, 820)
         self.setMinimumSize(760, 600)
         self.setStyleSheet(DARK_STYLE)
         central = QWidget()
@@ -58,6 +63,12 @@ class MainWindow(QMainWindow):
         self.live_scroll.setFrameShape(QScrollArea.Shape.NoFrame)
         self.live_scroll.setWidget(self.live_page)
         self.tabs.addTab(self.live_scroll, "Live")
+        self.replay_page = ReplayPage()
+        self.replay_scroll = QScrollArea()
+        self.replay_scroll.setWidgetResizable(True)
+        self.replay_scroll.setFrameShape(QScrollArea.Shape.NoFrame)
+        self.replay_scroll.setWidget(self.replay_page)
+        self.tabs.addTab(self.replay_scroll, "Replay")
         layout.addWidget(self.tabs, stretch=1)
         self.setCentralWidget(central)
         exit_action = QAction("終了", self)
@@ -74,6 +85,16 @@ class MainWindow(QMainWindow):
         self.live_page.start_requested.connect(self._start_capture)
         self.live_page.stop_requested.connect(self._stop_capture)
         self.live_page.refresh_requested.connect(self._refresh_devices)
+        self.operations = operations or OperationController(
+            self.settings.audio.internal_sample_rate, parent=self,
+        )
+        self.operations.finished.connect(self._on_operation, Qt.ConnectionType.QueuedConnection)
+        self.operations.busy_changed.connect(self._on_operation_busy)
+        self.replay_page.open_requested.connect(self._open_wave)
+        self.replay_page.analyze_requested.connect(self._analyze_wave)
+        self.replay_page.save_requested.connect(self._save_processed)
+        self.live_page.replay_requested.connect(self._analyze_live)
+        self.live_page.dump_requested.connect(self._dump_live)
         self._close_timer = QTimer(self)
         self._close_timer.setInterval(50)
         self._close_timer.timeout.connect(self.close)
@@ -129,10 +150,89 @@ class MainWindow(QMainWindow):
                 self._save_selection(event.device)
         elif isinstance(event, AudioLevel):
             self.live_page.set_level(event)
+        ring = self.controller.service.buffer
+        self.live_page.set_buffer_available(ring is not None and ring.size_frames > 0)
+
+    @Slot(bool)
+    def _on_operation_busy(self, busy: bool) -> None:
+        if self._closing:
+            return
+        self.replay_page.set_busy(busy)
+        self.live_page.set_operation_busy(busy)
+
+    @Slot()
+    def _open_wave(self) -> None:
+        path, _ = QFileDialog.getOpenFileName(self, "WAV を開く", str(self.data_root), "WAV (*.wav *.WAV)")
+        if path:
+            self.replay_page.set_wave_path(Path(path))
+
+    @Slot()
+    def _analyze_wave(self) -> None:
+        if self.replay_page.source is not None:
+            if self.operations.analyze(self.replay_page.source):
+                self.replay_page.begin_analysis()
+
+    def _live_source(self) -> LiveSource | None:
+        ring = self.controller.service.buffer
+        return LiveSource(ring) if ring is not None and ring.size_frames > 0 else None
+
+    @Slot()
+    def _analyze_live(self) -> None:
+        source = self._live_source()
+        if source is not None and self.operations.analyze(source, live=True):
+            self.replay_page.begin_analysis()
+            self.tabs.setCurrentIndex(1)
+
+    def _save_path(self, prefix: str) -> Path | None:
+        suggestion = self.data_root / f"{prefix}-{datetime.now():%Y%m%d-%H%M%S}.wav"
+        path, _ = QFileDialog.getSaveFileName(self, "WAV 保存", str(suggestion), "WAV (*.wav)")
+        if not path:
+            return None
+        destination = Path(path)
+        return destination if destination.suffix.lower() == ".wav" else destination.with_name(destination.name + ".wav")
+
+    @Slot()
+    def _dump_live(self) -> None:
+        source = self._live_source()
+        if source is not None:
+            path = self._save_path("live-buffer")
+            if path is not None:
+                self.operations.dump(source, path)
+
+    @Slot()
+    def _save_processed(self) -> None:
+        result = self.replay_page.result
+        if result is not None:
+            path = self._save_path("processed")
+            if path is not None:
+                self.operations.save(result.processed, path, self.replay_page.encoding_combo.currentData())
+
+    @Slot(object)
+    def _on_operation(self, event: OperationResult) -> None:
+        if self._closing:
+            return
+        if event.error:
+            if event.kind == "dump":
+                self.live_page.message_label.setText(event.error)
+            else:
+                self.replay_page.show_error(event.error)
+        elif event.cancelled:
+            self.replay_page.show_error("処理を中止しました。")
+        elif event.analysis is not None:
+            self.replay_page.set_result(event.analysis, live=event.kind == "live")
+        elif event.path is not None:
+            message = f"保存しました：{event.path}"
+            if event.kind == "dump":
+                self.live_page.message_label.setText(message)
+            else:
+                self.replay_page.message_label.setText(message)
+            self.statusBar().showMessage(message)
 
     def closeEvent(self, event: QCloseEvent) -> None:
         self._closing = True
-        if self.controller.shutdown(timeout=0):
+        audio_closed = self.controller.shutdown(timeout=0)
+        operations_closed = self.operations.shutdown(timeout=0)
+        if audio_closed and operations_closed:
             self._close_timer.stop()
             event.accept()
         else:

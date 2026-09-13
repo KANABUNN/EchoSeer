@@ -67,9 +67,52 @@ G431 / Realtek は PortAudio の形式照会では対応と判定されました
 G431 は 2 ch 指定でも拒否されました。原因を形式だけに断定できないため、
 取得成功扱いせず、画面案内・資源解放・別入力への再試行を確認しました。
 
+## Phase 2 — 実装・自動テスト確認済み（2026-09-14）
+
+- [x] PCM 8 / 16 / 24 / 32 bit、float 32 / 64 bit、対応 WAVE_FORMAT_EXTENSIBLE の WAV 読込
+- [x] 44100 / 48000 Hz × mono / stereo の実 WAV を用いた読込・振幅変換
+- [x] float32 WAV 保存で native レート・チャンネル数・サンプル値を完全保持
+- [x] PCM16 保存の量子化・範囲制限
+- [x] 空・破損・圧縮形式・不正数値・入力サイズ・解析後サイズの拒否
+- [x] 一時ファイルからの置換、書込み・置換失敗・キャンセル時の既存ファイル保護
+- [x] stereo / multichannel 平均、DC 除去、polyphase resampling、peak 正規化
+- [x] 44.1 / 48 / 192 kHz の変換後レート・長さ・周波数保持
+- [x] downsampling 時の alias 抑制、端数フレームの長さ
+- [x] 無音・逆位相・微小音声を正規化で無理に増幅しない
+- [x] リングバッファの dump、折返し後の chronological 順序と精度
+- [x] AudioSource / LiveSource / WaveFileSource / ClipSource と共通 Analyzer
+- [x] Live のコピーと保存した WAV から同一の解析サンプル列
+- [x] 同じ WAV の反復解析が bit 単位で一致し、SHA-256 も一致
+- [x] ファイル変更は再読込で反映
+- [x] Replay の開く・Analyze・float32 / PCM16 保存操作
+- [x] Live の直近バッファの Replay 送信・native WAV 保存
+- [x] Qt メインスレッドで結果表示、解析待ち中も取得継続、終了時の両ワーカー解放
+- [x] 再解析失敗時の古い結果の保存を無効化
+- [x] Stop 後の保持バッファ長表示、無音メーターと保存操作
+- [x] 全 pytest: **153 passed** / pip check 成功（既存 Phase 0・1 の 90 件を含む）
+
+## Phase 2 — 実 Windows / 音声・WAV 確認
+
+- [x] Qt platform windows、実ウィンドウで Live / Replay と 760 × 600 のスクロール表示を確認
+- [x] Windows 既定再生先の loopback 48000 Hz / 2 ch を取得、Start / Stop
+- [x] native 29760 フレームの float32 WAV 保存・再読込が元のバッファと完全一致
+- [x] LiveSource の解析結果と同じ録音 WAV の Replay 解析結果が完全一致
+- [x] 録音 WAV を 5 回解析し、同一サンプル列・SHA-256 に一致
+- [x] PCM16 stereo 44100 Hz / 4410 フレームを 48000 Hz mono / 4800 フレームへ変換
+- [x] 上記 PCM16 WAV を 3 回解析して同一サンプル列
+- [x] 解析後 float32 / PCM16 WAV 保存と再読込
+- [x] 破損 WAV の案内、保存無効化、正常 WAV での再試行
+- [x] 最終修正後、実機で保持バッファ 0.6 秒の表示と停止時のゼロ音量、native WAV 保存を再確認
+- [x] Capture / Replay ワーカーが終了後に残らない
+
+この段階の確認音と保存 WAV はプロジェクトの .runtime/ に置いており、Git 対象外です。
+実 Oracle 音声の認識・長時間実戦負荷・VoiceMeeter B1 のゲーム音経路の確認ではありません。
+LiveSource は直近区間のコピーを読む有限音声ソースです。
+候補イベントの連続解析と Replay の時刻・信頼度表示は後続 Phase で追加します。
+
 ## 後続 Phase — 未実装 / 未検証
 
-- Phase 2–6: WAV、resampling、mono、normalization、複数テンプレート、7分類、複合スコア、曖昧音の棄却
+- Phase 3–6: 複数テンプレート、7分類、複合スコア、曖昧音の棄却
 - Phase 7–9: 実 Oracle 録音の Pass 分離、Round 1～5、一致、不一致、重複、再構成
 - Phase 10–13: Live の認識表示、Oracle Map、Overlay、Calibration、Replay
 - Phase 14–16: Dataset 数値評価、実戦ログ、再接続の実戦調整、Hotkey、UX
