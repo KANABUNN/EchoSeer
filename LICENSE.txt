@@ -1,0 +1,8 @@
+Copyright (c) 2026 KANABUNN
+
+All rights reserved.
+
+This software and its source code are made available for viewing only.
+You may not use, copy, modify, merge, publish, distribute, sublicense,
+or sell copies of this software without prior written permission from
+the copyright holder.
