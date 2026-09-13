@@ -1,0 +1,13 @@
+.venv/
+.cache/
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+build/work/
+.runtime/
+.coverage
+htmlcov/
+config.json
+config.corrupt-*.json
+logs/

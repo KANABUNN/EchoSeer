@@ -1,0 +1,88 @@
+{
+  "schema_version": 1,
+  "audio": {
+    "backend": "wasapi_loopback",
+    "device": null,
+    "internal_sample_rate": 48000,
+    "buffer_duration": 10.0
+  },
+  "recognition": {
+    "waveform_weight": 0.6,
+    "spectrum_weight": 0.4,
+    "detection_threshold": 0.025,
+    "confidence_threshold": 0.82,
+    "high_confidence_threshold": 0.92,
+    "low_score_threshold": 0.55,
+    "margin_threshold": 0.1,
+    "high_margin_threshold": 0.18,
+    "duplicate_cooldown": 0.45,
+    "bandpass_enabled": false,
+    "bandpass_low_hz": 350.0,
+    "bandpass_high_hz": 3000.0,
+    "template_aggregation": "best",
+    "top_n": 3
+  },
+  "sequence": {
+    "lockout_duration": 10.0,
+    "silence_duration": 3.0,
+    "pass_gap": 2.0,
+    "event_timeout": 5.0
+  },
+  "overlay": {
+    "enabled": false,
+    "x": 40,
+    "y": 40,
+    "width": 660,
+    "height": 130,
+    "opacity": 0.9,
+    "scale": 1.0,
+    "font_size": 28,
+    "mode": "sequence",
+    "click_through": true
+  },
+  "logging": {
+    "event_logs": true,
+    "uncertain_audio": true,
+    "full_recording": false,
+    "debug": false
+  },
+  "oracle_labels": {
+    "L1": "左1",
+    "L2": "左2",
+    "L3": "左奥",
+    "MID": "中央",
+    "R1": "右1",
+    "R2": "右2",
+    "R3": "右奥"
+  },
+  "oracle_map_positions": {
+    "L1": {
+      "x": 0.12,
+      "y": 0.65
+    },
+    "L2": {
+      "x": 0.32,
+      "y": 0.4
+    },
+    "L3": {
+      "x": 0.5,
+      "y": 0.12
+    },
+    "MID": {
+      "x": 0.5,
+      "y": 0.65
+    },
+    "R1": {
+      "x": 0.5,
+      "y": 0.88
+    },
+    "R2": {
+      "x": 0.88,
+      "y": 0.65
+    },
+    "R3": {
+      "x": 0.7,
+      "y": 0.4
+    }
+  }
+}

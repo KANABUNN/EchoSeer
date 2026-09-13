@@ -1,0 +1,36 @@
+[build-system]
+requires = ["setuptools>=80"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "destiny-oracle-assistant"
+version = "0.1.0"
+description = "Local audio recognition assistant for Destiny 2 Vault of Glass"
+readme = "README.md"
+requires-python = ">=3.14,<3.15"
+license = "MIT"
+license-files = ["LICENSE.txt"]
+dependencies = [
+    "PyAudioWPatch>=0.2.12.8,<0.3; sys_platform == 'win32'",
+    "numpy>=2.3,<3",
+    "scipy>=1.16,<2",
+    "PySide6>=6.10,<7",
+]
+[project.optional-dependencies]
+dev = ["pytest>=9,<10"]
+build = ["pyinstaller>=6.16,<7"]
+[project.gui-scripts]
+oracle-assistant = "app.application:main"
+[tool.setuptools.packages.find]
+where = ["."]
+include = [
+    "app*", "audio*", "config*", "detector*", "dsp*",
+    "encounter*", "logging_ext*", "replay*", "templates*", "ui*",
+]
+exclude = ["tests*", "build*"]
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
+addopts = "-ra --strict-markers"
+cache_dir = ".cache/pytest"
+markers = ["gui: Qt application startup tests"]
