@@ -1,1 +1,1 @@
-"""Persistent multi-sample Oracle templates; reserved for Phase 3."""
+"""Persistent multi-sample Oracle templates and quality metadata."""

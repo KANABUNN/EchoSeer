@@ -14,6 +14,7 @@ from audio.capture import CaptureSession
 from audio.device_manager import DeviceCatalog, DeviceManager, resolve_device
 from audio.level import AudioLevel, measure_level
 from audio.ring_buffer import RingBuffer
+from audio.recorder import RecordingRequest, RecordingEvent, SampleRecorder
 from config.schema import DeviceIdentity
 
 logger = logging.getLogger("oracle_assistant.audio")
@@ -30,7 +31,7 @@ class CaptureStatus:
     device: AudioDevice | None = None
 
 
-AudioEvent = DeviceCatalog | CaptureStatus | AudioLevel
+AudioEvent = DeviceCatalog | CaptureStatus | AudioLevel | RecordingEvent
 
 
 class CaptureService:
@@ -44,7 +45,7 @@ class CaptureService:
         self._buffer_duration = buffer_duration
         self._manager = manager or DeviceManager()
         self._retry_seconds = retry_seconds
-        self._commands: Queue[tuple[str, AudioDevice | None]] = Queue()
+        self._commands: Queue[tuple[str, AudioDevice | RecordingRequest | None]] = Queue()
         self._closing = Event()
         self._thread_lock = Lock()
         self._thread: Thread | None = None
@@ -60,6 +61,9 @@ class CaptureService:
         self._last_audio = 0.0
         self._dropped = 0
         self._overflows = 0
+        self._recorder: SampleRecorder | None = None
+        self._record_token = ""
+        self._record_next_progress = 0.0
 
     @property
     def buffer(self) -> RingBuffer | None:
@@ -91,6 +95,13 @@ class CaptureService:
         if not self._closing.is_set():
             self._commands.put(("stop", None))
 
+    def record(self, seconds: float, token: str) -> None:
+        self.start_worker()
+        self._commands.put(("record", RecordingRequest(seconds, token)))
+
+    def cancel_recording(self) -> None:
+        self._commands.put(("cancel_record", None))
+
     def shutdown(self, timeout: float = 5.0) -> bool:
         self._closing.set()
         if self._thread is not None:
@@ -109,6 +120,7 @@ class CaptureService:
                 logger.warning("Could not terminate PortAudio: %s", error)
 
     def _stop_session(self) -> None:
+        self._cancel_recording("音声入力を停止したため録音を中止しました。")
         session, self._session = self._session, None
         if session is not None:
             session.close()
@@ -152,8 +164,31 @@ class CaptureService:
             stats.overflow_count if stats is not None else 0,
         )
 
-    def _handle(self, command: str, device: AudioDevice | None) -> None:
-        if command == "stop":
+    def _cancel_recording(self, message: str, state: str = "CANCELLED") -> None:
+        if self._recorder is not None:
+            token = self._record_token
+            self._recorder = None
+            self._publish(RecordingEvent(state, token, message=message))
+
+    def _handle(self, command: str, device: AudioDevice | RecordingRequest | None) -> None:
+        if command == "record" and isinstance(device, RecordingRequest):
+            try:
+                if self._session is None or not self._session.is_active():
+                    raise AudioError("Live で音声入力を開始してください。")
+                if self._recorder is not None:
+                    raise AudioError("すでに録音中です。")
+                native = self._session.device
+                self._recorder = SampleRecorder(native.sample_rate, native.channels, device.seconds, time.monotonic())
+                self._record_token = device.token
+                self._record_next_progress = 0
+                self._publish(RecordingEvent("RECORDING", device.token, message="録音中です。Oracle の音を収録してください。"))
+            except (AudioError, OSError, ValueError, RuntimeError, MemoryError) as error:
+                self._publish(RecordingEvent("ERROR", device.token, message=f"録音を開始できません：{error}"))
+            return
+        elif command == "cancel_record":
+            self._cancel_recording("録音を中止しました。")
+            return
+        elif command == "stop":
             self._target = None
             self._publish(CaptureStatus("STOPPING"))
             silent = self._silent_level()
@@ -199,12 +234,25 @@ class CaptureService:
         if stats.error:
             raise AudioError(stats.error)
         if stats.dropped_frames != self._dropped or stats.overflow_count != self._overflows:
+            self._cancel_recording("音声が欠落したため録音を中止しました。再録音してください。", "ERROR")
             ring.clear()
             self._dropped, self._overflows = stats.dropped_frames, stats.overflow_count
             logger.warning("Audio discontinuity: dropped=%s overflow=%s", self._dropped, self._overflows)
         if block is not None:
             ring.write(block.samples)
             self._last_audio = now
+            recorder = self._recorder
+            if recorder is not None:
+                if recorder.append(block):
+                    clip = recorder.clip()
+                    token = self._record_token
+                    self._recorder = None
+                    self._publish(RecordingEvent("COMPLETE", token, 1.0, "録音が完了しました。保存しています。", clip))
+                elif now >= self._record_next_progress:
+                    self._publish(RecordingEvent("RECORDING", self._record_token, recorder.progress))
+                    self._record_next_progress = now + 0.1
+        if self._recorder is not None and now > self._recorder.deadline:
+            self._cancel_recording("録音音声を取得できませんでした。入力先を確認してください。", "ERROR")
         if now >= self._next_meter:
             if block is not None:
                 values = block.samples

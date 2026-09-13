@@ -3,6 +3,7 @@
 from datetime import datetime
 import logging
 from pathlib import Path
+from uuid import uuid4
 
 from PySide6.QtCore import QTimer, Qt, Slot
 from PySide6.QtGui import QAction, QCloseEvent
@@ -13,6 +14,8 @@ from audio.device_manager import DeviceCatalog
 from audio.level import AudioLevel
 from audio.service import CaptureStatus
 from audio.sources import LiveSource
+from audio.recorder import RecordingEvent
+from encounter.vog_oracles import OracleId
 from config.manager import ConfigManager
 from config.schema import AppConfig, ConfigValidationError
 from ui.audio_controller import AudioController
@@ -20,6 +23,8 @@ from ui.live_page import LivePage
 from ui.theme import DARK_STYLE
 from ui.operation_controller import OperationController, OperationResult
 from ui.replay_page import ReplayPage
+from ui.calibration_page import CalibrationPage
+from ui.template_controller import TemplateController, TemplateTask, TemplateResult
 
 logger = logging.getLogger("oracle_assistant.ui")
 
@@ -30,6 +35,7 @@ class MainWindow(QMainWindow):
         settings: AppConfig | None = None, config_manager: ConfigManager | None = None,
         controller: AudioController | None = None,
         operations: OperationController | None = None,
+        templates: TemplateController | None = None,
     ) -> None:
         super().__init__()
         self.data_root = data_root
@@ -69,6 +75,12 @@ class MainWindow(QMainWindow):
         self.replay_scroll.setFrameShape(QScrollArea.Shape.NoFrame)
         self.replay_scroll.setWidget(self.replay_page)
         self.tabs.addTab(self.replay_scroll, "Replay")
+        self.calibration_page = CalibrationPage(self.settings.oracle_labels)
+        self.calibration_scroll = QScrollArea()
+        self.calibration_scroll.setWidgetResizable(True)
+        self.calibration_scroll.setFrameShape(QScrollArea.Shape.NoFrame)
+        self.calibration_scroll.setWidget(self.calibration_page)
+        self.tabs.addTab(self.calibration_scroll, "Calibration")
         layout.addWidget(self.tabs, stretch=1)
         self.setCentralWidget(central)
         exit_action = QAction("終了", self)
@@ -95,6 +107,22 @@ class MainWindow(QMainWindow):
         self.replay_page.save_requested.connect(self._save_processed)
         self.live_page.replay_requested.connect(self._analyze_live)
         self.live_page.dump_requested.connect(self._dump_live)
+        self.templates = templates or TemplateController(
+            data_root / "templates", self.settings.audio.internal_sample_rate, parent=self,
+        )
+        self._record_target = None
+        self._last_deleted = None
+        self.templates.finished.connect(self._on_template_result, Qt.ConnectionType.QueuedConnection)
+        self.templates.busy_changed.connect(self.calibration_page.set_busy)
+        self.calibration_page.import_requested.connect(self._import_templates)
+        self.calibration_page.record_requested.connect(self._record_template)
+        self.calibration_page.cancel_requested.connect(self.controller.service.cancel_recording)
+        self.calibration_page.play_requested.connect(self._play_template)
+        self.calibration_page.stop_play_requested.connect(self.templates.stop_playback)
+        self.calibration_page.delete_requested.connect(self._delete_template)
+        self.calibration_page.restore_requested.connect(self._restore_template)
+        self.calibration_page.refresh_requested.connect(lambda: self.templates.submit(TemplateTask("refresh")))
+        self.templates.submit(TemplateTask("refresh"))
         self._close_timer = QTimer(self)
         self._close_timer.setInterval(50)
         self._close_timer.timeout.connect(self.close)
@@ -144,10 +172,13 @@ class MainWindow(QMainWindow):
             self.live_page.set_catalog(event)
         elif isinstance(event, CaptureStatus):
             self.live_page.set_status(event)
+            self.calibration_page.set_live(event.state == "LIVE")
             self.statusBar().showMessage(event.state)
             if event.state == "LIVE" and event.device is not None:
                 self.settings.audio.backend = event.device.backend
                 self._save_selection(event.device)
+        elif isinstance(event, RecordingEvent):
+            self._on_recording(event)
         elif isinstance(event, AudioLevel):
             self.live_page.set_level(event)
         ring = self.controller.service.buffer
@@ -228,11 +259,77 @@ class MainWindow(QMainWindow):
                 self.replay_page.message_label.setText(message)
             self.statusBar().showMessage(message)
 
+    @Slot()
+    def _import_templates(self) -> None:
+        paths, _ = QFileDialog.getOpenFileNames(self, "Oracle WAV を登録", str(self.data_root), "WAV (*.wav *.WAV)")
+        if paths:
+            self.templates.submit(TemplateTask("import", self.calibration_page.oracle, tuple(Path(p) for p in paths)))
+
+    @Slot()
+    def _record_template(self) -> None:
+        if self._record_target is not None or self.templates.busy:
+            return
+        token = uuid4().hex
+        self._record_target = (token, self.calibration_page.oracle)
+        self.calibration_page.set_recording(True)
+        self.calibration_page.progress_bar.setValue(0)
+        self.controller.service.record(self.calibration_page.duration_spin.value(), token)
+
+    def _on_recording(self, event: RecordingEvent) -> None:
+        if self._record_target is None or event.token != self._record_target[0]:
+            return
+        self.calibration_page.show_recording(event)
+        if event.state == "COMPLETE":
+            oracle = self._record_target[1]
+            self._record_target = None
+            self.calibration_page.set_recording(False)
+            if not self.templates.submit(TemplateTask("record", oracle, clip=event.clip)):
+                self.calibration_page.message_label.setText("保存処理が使用中です。再録音してください。")
+        elif event.state in ("ERROR", "CANCELLED"):
+            self._record_target = None
+            self.calibration_page.set_recording(False)
+
+    @Slot()
+    def _play_template(self) -> None:
+        sample = self.calibration_page.sample
+        if sample and self.templates.submit(TemplateTask(
+            "play", self.calibration_page.oracle, sample_id=sample.metadata.sample_id,
+            volume=self.calibration_page.volume_slider.value() / 100,
+        )):
+            self.calibration_page.set_playing()
+
+    @Slot()
+    def _delete_template(self) -> None:
+        sample = self.calibration_page.sample
+        if sample:
+            self.templates.submit(TemplateTask("delete", self.calibration_page.oracle, sample_id=sample.metadata.sample_id))
+
+    @Slot()
+    def _restore_template(self) -> None:
+        if self._last_deleted:
+            self.templates.submit(TemplateTask("restore", self._last_deleted.oracle, deleted=self._last_deleted))
+            self.calibration_page.oracle_combo.setCurrentIndex(list(OracleId).index(self._last_deleted.oracle))
+
+    @Slot(object)
+    def _on_template_result(self, event: TemplateResult) -> None:
+        if self._closing:
+            return
+        if event.catalog is not None:
+            self.calibration_page.set_catalog(event.catalog, event.selected_id)
+        if event.deleted is not None:
+            self._last_deleted = event.deleted
+        elif event.kind == "restore" and event.selected_id:
+            self._last_deleted = None
+        self.calibration_page.set_undo(self._last_deleted is not None)
+        if event.message:
+            self.calibration_page.message_label.setText(event.message)
+
     def closeEvent(self, event: QCloseEvent) -> None:
         self._closing = True
         audio_closed = self.controller.shutdown(timeout=0)
         operations_closed = self.operations.shutdown(timeout=0)
-        if audio_closed and operations_closed:
+        templates_closed = self.templates.shutdown(timeout=0)
+        if audio_closed and operations_closed and templates_closed:
             self._close_timer.stop()
             event.accept()
         else:

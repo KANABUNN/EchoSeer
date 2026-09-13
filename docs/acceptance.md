@@ -110,9 +110,49 @@ G431 は 2 ch 指定でも拒否されました。原因を形式だけに断定
 LiveSource は直近区間のコピーを読む有限音声ソースです。
 候補イベントの連続解析と Replay の時刻・信頼度表示は後続 Phase で追加します。
 
+## Phase 3 — 実装・自動テスト確認済み（2026-09-14）
+
+- [x] 固定 OracleId の 7 種と編集可能な表示名の分離
+- [x] 各 Oracle への複数 WAV Import / 録音登録、UUID ごとの保存
+- [x] 共通 Analyzer で mono / 内部レート / DC 除去 / 正規化
+- [x] native 元音声の float32 WAV 保持、日時・形式・Peak / RMS・品質・checksum
+- [x] 無音・DC・逆位相の拒否、短さ・長さ・微小音量・クリッピングの警告
+- [x] Oracle ごとの一覧・件数・選択音声の品質表示・再読込
+- [x] 新しい TemplateManager / アプリ起動後の保存内容保持
+- [x] 保存途中・公開失敗・キャンセル時の未完成サンプル隔離と既存データ保護
+- [x] 情報・音声の破損、欠落、Oracle フォルダー不正を警告し、正常サンプルは表示
+- [x] サンプルとフォルダーのリンク・junction / 範囲外 ID の拒否
+- [x] Delete による .trash 退避、最後の削除の復元、衝突時の既存ファイル保護
+- [x] 録音開始前の音声除外、native の指定フレーム数、進捗表示
+- [x] 録音中止・Stop・入力停止・overflow・タイムアウトで部分サンプルを破棄
+- [x] 録音開始失敗を通知し、健康な Live ストリームを維持
+- [x] 既定出力へのレート・チャンネル変換、再生音量、Listen / 停止
+- [x] 出力開始失敗・途中停止・キャンセル時の再生資源解放
+- [x] Qt メインスレッドで結果表示、録音・再生・Import 中の終了とワーカー解放
+- [x] 全 pytest: **218 passed** / pip check 成功（既存 153 件 + Phase 3 の 65 件）
+
+リンク・junction の拒否は OS の判定を差し替えたテストです。
+Windows の symlink 作成権限を前提にしていません。
+
+## Phase 3 — 実 Windows / 音声確認
+
+- [x] Qt platform windows、通常サイズと 760 × 600 の Calibration スクロール表示
+- [x] 合成 WAV の 7 種 × 2 件を GUI Import し、Oracle ごとの一覧・形式を確認
+- [x] Windows 既定 loopback 48000 Hz / 2 ch で 0.5 秒 / 24000 native フレームを録音登録
+- [x] 元音声の非無音、Peak / RMS、48 kHz mono の登録形式を確認
+- [x] 実 Windows 既定出力で Listen（検証音量 5%）・停止
+- [x] 録音サンプルの Delete / 復元、同じ ID を保持
+- [x] アプリを開き直して L1 3 件・残り各 2 件、合計 15 件を保持
+- [x] 最終の画面調整後に Listen を再確認、再生中の終了でも全 Oracle ワーカー解放
+
+検証音・ユーザーデータ・画像・report.json は .runtime/phase3-native/ にあり、Git 対象外です。
+既定 loopback には確認音以外の Windows 再生音が含まれる場合があります。
+実 Oracle サンプルを使った品質判定・分類・認識精度、ゲーム中の手動録音は未検証です。
+Phase 3 の完了範囲はサンプル管理で、分類器は後続 Phase に実装します。
+
 ## 後続 Phase — 未実装 / 未検証
 
-- Phase 3–6: 複数テンプレート、7分類、複合スコア、曖昧音の棄却
+- Phase 4–6: 基本 Oracle 分類、スペクトル解析、信頼度判定
 - Phase 7–9: 実 Oracle 録音の Pass 分離、Round 1～5、一致、不一致、重複、再構成
 - Phase 10–13: Live の認識表示、Oracle Map、Overlay、Calibration、Replay
 - Phase 14–16: Dataset 数値評価、実戦ログ、再接続の実戦調整、Hotkey、UX

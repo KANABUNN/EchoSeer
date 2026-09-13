@@ -1,1 +1,1 @@
-"""VoG sequence state and validation; reserved for Phase 7 onward."""
+"""Fixed VoG Oracle identities; sequence validation follows in later phases."""

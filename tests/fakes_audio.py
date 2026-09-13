@@ -22,6 +22,7 @@ class FakeStream:
         self.active = False
         self._stop = Event()
         self.thread: Thread | None = None
+        self.output_bytes: list[bytes] = []
 
     def start_stream(self) -> None:
         self.active = True
@@ -31,9 +32,13 @@ class FakeStream:
     def _run(self) -> None:
         frames, channels = self.options["frames_per_buffer"], self.options["channels"]
         samples = np.full((frames, channels), 0.2, dtype=np.float32).tobytes()
+        if self.factory.tone:
+            samples = np.repeat((0.2 * np.sin(2 * np.pi * 440 * np.arange(frames) / self.options["rate"]))[:, None], channels, axis=1).astype(np.float32).tobytes()
         while not self._stop.is_set():
             if not self.factory.no_data:
-                _, status = self.options["stream_callback"](samples, frames, {}, 0)
+                data, status = self.options["stream_callback"](samples, frames, {}, 0)
+                if self.options.get("output"):
+                    self.output_bytes.append(data)
                 if status != FakeModule.paContinue:
                     break
             self._stop.wait(0.01)
@@ -78,7 +83,7 @@ class FakeInterface:
         }
 
     def get_host_api_info_by_index(self, index: int) -> dict[str, Any]:
-        return {"name": "Windows WASAPI", "defaultInputDevice": 1}
+        return {"name": "Windows WASAPI", "defaultInputDevice": 1, "defaultOutputDevice": 0}
 
     def get_host_api_info_by_type(self, api_type: int) -> dict[str, Any]:
         return self.get_host_api_info_by_index(0)
@@ -122,6 +127,7 @@ class AudioFactory:
         self.rate = 48000
         self.fail_open = False
         self.no_data = False
+        self.tone = False
         self.open_gate: Event | None = None
         self.open_entered = Event()
         self.interfaces: list[FakeInterface] = []

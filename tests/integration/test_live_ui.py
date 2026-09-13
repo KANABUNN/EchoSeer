@@ -35,6 +35,8 @@ def pump_until(predicate, timeout: float = 3) -> None:
         if predicate():
             return
         QTest.qWait(10)
+        # QtTest waits can retain the GIL; let Python file workers run too.
+        time.sleep(0.001)
     assert predicate(), "Qt condition did not become true"
 
 
@@ -51,6 +53,7 @@ def cleanup(window: MainWindow, factory: AudioFactory) -> None:
         factory.open_gate.set()
     assert window.controller.shutdown(2)
     assert window.operations.shutdown(2)
+    assert window.templates.shutdown(2)
     window.close()
     QApplication.processEvents()
     assert not window.controller.service.is_alive

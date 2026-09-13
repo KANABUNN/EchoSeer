@@ -61,5 +61,7 @@ def main(argv: list[str] | None = None) -> int:
             logger.error("Audio worker did not shut down")
         if not window.operations.shutdown(timeout=5):
             logger.error("Replay worker did not shut down")
+        if not window.templates.shutdown(timeout=5):
+            logger.error("Template worker did not shut down")
         logger.info("Oracle Assistant stopped")
         close_logging()

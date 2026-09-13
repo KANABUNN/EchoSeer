@@ -3,10 +3,11 @@
 Vault of Glass のゲーム音声からオラクルを識別し、順序と信頼度を表示する
 Windows アプリケーションを、指示書の Phase 順に開発しています。
 
-**Phase 2（Replay / 音声基盤）まで実装済みです。**
+**Phase 3（テンプレート管理）まで実装済みです。**
 WASAPI Loopback / 通常録音入力の選択、Start / Stop、リアルタイム音量表示、
 リングバッファ、WAV 読み書き、共通前処理、簡易 Replay、設定保存・復旧、診断ログが動作します。
-オラクル認識、Calibration、Overlay、配布 EXE は後続 Phase で実装します。
+Calibration で Oracle ごとの複数サンプル登録・録音・Import・Listen・削除・復元ができます。
+オラクル認識、Calibration の詳細調整、Overlay、配布 EXE は後続 Phase で実装します。
 
 ゲームへの操作送信、メモリ読み取り、DLL 注入、ゲームファイルへのアクセス、
 自動入力、Bungie API、クラウド認識、テレメトリーは実装しません。
@@ -52,7 +53,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\setup.ps1
 5. Stop で停止します。停止後にデバイス変更・再検索ができます。
 
 起動だけでは音声取得を開始しません。
-小さいウィンドウでは Live / Replay の内容をスクロールできます。
+小さいウィンドウでは Live / Replay / Calibration の内容をスクロールできます。
 長いデバイス名は項目にマウスを合わせて確認できます。
 
 ## VoiceMeeter の音を取り込む
@@ -95,7 +96,7 @@ Windows / VoiceMeeter の出力先・音声設定を確認して再検索し、�
 - Replay で Analyze を押し直すと、取得が進んでも同じコピーを再解析します。
 - Replay の「WAV 保存」は変換済みモノラル音声を保存します。
 
-WAV ファイルは保存操作時だけ生成します。自動のフルセッション録音はありません。
+WAV ファイルは保存・サンプル録音登録・Import の操作時に生成します。自動のフルセッション録音はありません。
 Stop 後の最後のバッファはメモリ内に残り、次の取得開始時に置き換えます。
 アプリ終了時に破棄されます。
 停止後も保持バッファの長さと保存操作を利用でき、現在の音量メーターはゼロになります。
@@ -127,6 +128,18 @@ IEEE float 32 / 64 bit、および対応 PCM / float の WAVE_FORMAT_EXTENSIBLE 
 ファイルの読み込み・解析・保存は、取得とは別のワーカーで行います。
 再解析に失敗した場合は古い結果の保存を無効にします。
 保存は一時ファイルを書き終えてから置換し、途中の失敗・キャンセルでは既存ファイルを保護します。
+
+## Calibration / テンプレート管理（Phase 3）
+
+1. Calibration で Oracle を選び、Import WAV で複数ファイルを登録します。
+2. 録音する場合は Live を Start し、Calibration で時間を選んで Record Sample を押します。
+3. 一覧で品質情報を確認し、Listen・再生停止・Delete・削除を戻すを使えます。
+
+開始後の音声を指定時間だけ取得し、登録は共通前処理済みの mono 音声と元の native 音声を保存します。
+無音は登録を拒否し、短さ・長さ・小さな RMS・クリッピングを警告します。
+途中の録音中断や音声欠落では部分サンプルを登録しません。
+Oracle ごとの複数サンプルはアプリの再起動後も残ります。
+詳しい操作と保存形式は [サンプル登録手順](docs/calibration.md) を参照してください。
 
 ## 設定・ログ保存場所
 
@@ -160,11 +173,11 @@ app/             起動処理、保存先
 config/          初期値、schema、設定保存・復旧
 logging_ext/     診断ログ、JSONL イベントログ基盤
 audio/           取得、リングバッファ、WAV 入出力、音声ソース、レート変換
-ui/              Live / Replay、音量表示、Qt Signal/Slot、ファイル処理ワーカー
+ui/              Live / Replay / Calibration、音量表示、Qt Signal/Slot、処理ワーカー
 dsp/             mono・DC 除去・正規化、特徴量は後続 Phase
 templates/       複数テンプレート管理（Phase 3）
 detector/        検出・分類・信頼度（Phase 4 以降）
-encounter/       遭遇・Pass 判定（Phase 7 以降）
+encounter/       固定 OracleId、遭遇・Pass 判定は Phase 7 以降
 replay/          Live / WAV 共通 Analyzer、評価は後続 Phase
 tests/           Unit / 音声ワーカー / GUI テスト、音声・Dataset 用フォルダー
 scripts/         セットアップ・検証
@@ -191,7 +204,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\verify.ps1
 .\.venv\Scripts\python.exe -m pip check
 ```
 
-Python 3.14.6 で **153 passed**、依存関係の確認も成功しています。
+Python 3.14.6 で **218 passed**、依存関係の確認も成功しています。
 自動テストは実デバイス・ゲーム・VoiceMeeter の起動を必要としません。
 GUI は offscreen、音声は実スレッドで動くデバイス代替を用いて確認します。
 
@@ -202,6 +215,8 @@ VoiceMeeter B1 の 48000 / 44100 Hz ストリーム取得、
 Phase 2 では実 loopback を WAV 保存し、Live と Replay の解析列が完全に一致しました。
 録音 WAV を 5 回、PCM16 stereo 44100 Hz WAV を 3 回再解析して一致を確認しています。
 解析後の float32 / PCM16 保存・再読込、破損 WAV の案内・再試行も確認しています。
+Phase 3 では 7 種 × 2 件の WAV を登録し、native 48000 Hz / 2 ch の 0.5 秒を録音しました。
+Listen・停止・削除・復元、再起動後の 15 件保持、再生中の終了と全ワーカー解放も確認しています。
 実機確認の詳細と制限は [受け入れ確認](docs/acceptance.md) に記載しています。
 VoiceMeeter B1 へのゲーム音経路、物理的な切断・再接続、実 Oracle 認識は未検証です。
 
@@ -212,7 +227,7 @@ VoiceMeeter B1 へのゲーム音経路、物理的な切断・再接続、実 O
 - **設定の警告**: 保存先のアクセス権・空き容量・退避ファイルを確認してください。
 - **LIVE でも無音**: ゲームの出力先、VoiceMeeter のバス、ミュートを確認してください。
 - **デバイスを開始できない**: 再検索し、Windows / VoiceMeeter の音声設定を確認してください。
-- **オラクルを認識しない**: Phase 2 は音声基盤までの実装です。
+- **オラクルを認識しない**: Phase 3 は音声基盤とサンプル管理までの実装です。
 - **WAV を解析できない**: 対応形式・サイズを確認し、元の音声から再出力してください。
 - **保存できない**: 保存先のアクセス権・空き容量を確認してください。
 - **起動しない / 入力エラー**: --debug の出力と logs/application.log を確認してください。

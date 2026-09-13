@@ -227,3 +227,59 @@ Phase 1 の VoiceMeeter B1 ゲーム音経路・物理再接続・一部 endpoin
 
 次は Phase 3 — OracleId、複数テンプレート管理、録音 / WAV import、
 metadata、再起動後の保持、削除・再生です。
+
+## Phase 3 — テンプレート管理（2026-09-14）
+
+### 実装範囲
+
+encounter.vog_oracles の OracleId を固定 ID とし、表示には設定の oracle_labels を使用。
+Calibration の最小 UI に Oracle 選択・一覧・録音・複数 WAV Import・品質情報・Listen・
+再生停止・Delete・最後の削除の復元・再読込を追加した。詳細調整は Phase 12 に残す。
+
+TemplateManager は Qt に依存せず、Oracle / UUID ディレクトリに
+sample.wav、original.wav、schema version 1 の metadata.json を保存する。
+登録は Phase 2 の Analyzer を共用。前処理済み mono と native 元音声を float32 WAV に保存。
+元ファイルを変更しない。Peak / RMS / clipping、長さ、形式、UTC 日時、source、SHA-256 を保持。
+無音・DC・逆位相は拒否し、短さ・長さ・小さな RMS・最大振幅付近は警告する。
+サンプルは 10 秒以内、録音用配列は 64 MiB 以下。
+
+一時ディレクトリへ全ファイルを書き、flush / fsync・キャンセル確認後にディレクトリを公開する。
+失敗した新規サンプルを一覧へ出さず、既存サンプルに影響しない。
+厳格な metadata 検証と音声形式・checksum の確認で、不正なサンプルを一覧から隔離して警告する。
+Oracle フォルダー自体が不正でも他の Oracle のサンプルは読み込める。
+削除は範囲とリンクを検査したディレクトリを .trash へ移し、同じ ID と音声で復元可能。
+共有 manifest を持たず、Oracle ごとの複数サンプルは起動後に再走査する。
+
+録音は既存 CaptureService の worker 内で、開始後のフレームだけを正確な指定数まで蓄積する。
+callback に DSP / ファイル処理を追加しない。
+録音中止・入力停止・音声欠落・時間切れでは部分サンプルを保存しない。
+録音セットアップの失敗も RecordingEvent にして UI の待機を終え、健康な Live を維持する。
+
+TemplateController の専用 worker が Import・保存・一覧・削除・復元・再生を実行する。
+再生は現在の WASAPI 既定出力へレート・チャンネル変換して音量を適用する。
+callback は用意した音声を渡し、最後のブロックをゼロで埋める。
+停止・開始失敗・途中停止・アプリ終了でも stream / PortAudio を解放する。
+MainWindow の終了は Capture / Replay / Template の 3 worker を非同期に待つ。
+
+### 検証
+
+- scripts/verify.ps1: pip check 成功、**218 passed**、exit code 0、pytest 21.58 秒。
+- 既存 Phase 0–2 の 153 件に Phase 3 の 65 件を追加。
+- 7 Oracle × 2 サンプルの保存と新しい manager での再読込。
+- WAV 形式変換、native サンプル完全保持、品質警告、無音拒否。
+- metadata / 音声破損・欠落・公開失敗・キャンセル・復元衝突・不正 ID / リンク / junction。
+- 録音の stale 区間除外、開始・終了境界、指定フレーム数、進捗、Stop / 中止 / 入力停止 / overflow / timeout。
+- 再生の native 変換・gain・末尾 padding、停止・反復再生・出力エラー・資源解放。
+- GUI Import の部分成功、固定 Oracle 対応、品質表示・Listen・削除と復元・アプリ再起動。
+- Import / 録音 / 再生中の終了、Qt メインスレッド更新とワーカー解放。
+
+実 Windows では合成音声 14 件を GUI 登録し、
+既定 loopback 48000 Hz / 2 ch の 0.5 秒 / 24000 フレームを追加録音した。
+低音量 Listen・停止・削除 / 復元、アプリ再起動後の 15 件保持を確認。
+最終の一覧サイズ調整後もネイティブ Listen と再生中の終了を確認した。
+画像・report.json・検証 WAV は .runtime/phase3-native/ へ保存し、Git 対象外。
+
+QtTest の待機が Python ファイル worker の進行を妨げるため、テストの条件待機で GIL を譲る。
+Qt が str Enum を QVariant の文字列として返すため、選択値を OracleId に変換し直す。
+実 Oracle 分類・ゲーム中の録音・認識精度は未検証。
+次は Phase 4 — 基本 Oracle 認識、normalized correlation、分類とスコア順位の GUI 表示。
