@@ -3,12 +3,14 @@
 Vault of Glass のゲーム音声からオラクルを識別し、順序と信頼度を表示する
 Windows アプリケーションを、指示書の Phase 順に開発しています。
 
-**Phase 5（スペクトル解析と複合スコア）まで実装済みです。**
+**Phase 6（信頼度判定）まで実装済みです。**
 WASAPI Loopback / 通常録音入力の選択、Start / Stop、リアルタイム音量表示、
 リングバッファ、WAV 読み書き、共通前処理、簡易 Replay、設定保存・復旧、診断ログが動作します。
 Calibration で Oracle ごとの複数サンプル登録・録音・Import・Listen・削除・復元ができます。
 Replay と Live の直近区間で、波形とスペクトルによる Oracle 候補・複合スコア・全7種類の順位を表示します。
-信頼度、順序処理、Calibration の詳細調整、Overlay、配布 EXE は後続 Phase で実装します。
+HIGH / MEDIUM / LOW / REJECTED と unknown、Live の重複抑制、認識ログ・不確かな音声の保存切替を実装しました。
+詳しくは [信頼度の使い方](docs/confidence.md) を確認してください。
+順序処理、Calibration の詳細調整、Overlay、配布 EXE は後続 Phase で実装します。
 
 ゲームへの操作送信、メモリ読み取り、DLL 注入、ゲームファイルへのアクセス、
 自動入力、Bungie API、クラウド認識、テレメトリーは実装しません。
@@ -118,7 +120,7 @@ peak が 1e-6 以下の音声はゼロとして扱い、微小ノイズを増幅
 
 Live / Replay のどちらも一つの完全な入力区間に前処理を適用します。
 callback の境界ごとに変換・正規化することはありません。
-Live の連続 Oracle 検出や Replay の候補時刻・信頼度表示は後続 Phase の作業です。
+連続 Oracle 検出と発音開始時刻の検出は後続 Phase の作業です。
 
 読込対応は little-endian RIFF / WAVE の PCM 8 / 16 / 24 / 32 bit、
 IEEE float 32 / 64 bit、および対応 PCM / float の WAVE_FORMAT_EXTENSIBLE です。
@@ -175,7 +177,7 @@ Oracle ごとの複数サンプルはアプリの再起動後も残ります。
 - 退避できなければ原本を保持し、読み込み・保存のエラーを GUI に表示します。
 - 診断ログは 5 MiB × 最大 4 ファイルです。
 - 比較には waveform_weight / spectrum_weight / template_aggregation / top_n / bandpass を使用します。
-- confidence 閾値・順序設定は後続 Phase 用で、現在の候補を確定するためには使用しません。
+- confidence 閾値は Phase 6 から採用判定に使用します。順序設定は後続 Phase 用です。
 
 設定例は [config.example.json](docs/config.example.json) を参照してください。
 認識閾値やタイミングは調整前の仮値です。
@@ -191,7 +193,7 @@ audio/           取得、リングバッファ、WAV 入出力、音声ソー�
 ui/              Live / Replay / Calibration、音量表示、Qt Signal/Slot、処理ワーカー
 dsp/             mono・DC 除去・正規化・帯域処理・正規化相関・STFT特徴
 templates/       複数テンプレート管理（Phase 3）
-detector/        Oracle 波形/スペクトル分類・複合順位、イベント検出と信頼度は後続 Phase
+detector/        Oracle 波形/スペクトル順位・複合スコア・信頼度判定、連続イベント検出は後続 Phase
 encounter/       固定 OracleId、遭遇・Pass 判定は Phase 7 以降
 replay/          Live / WAV 共通 Analyzer、評価は後続 Phase
 tests/           Unit / 音声ワーカー / GUI テスト、音声・Dataset 用フォルダー
@@ -219,9 +221,9 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\verify.ps1
 .\.venv\Scripts\python.exe -m pip check
 ```
 
-Python 3.14.6 で **343 passed**、依存関係の確認も成功しています。
+Python 3.14.6 で **412 passed**、依存関係の確認も成功しています。
 自動テストは実デバイス・ゲーム・VoiceMeeter の起動を必要としません。
-うち15件は任意のローカル samples/A.wav〜G.wav を使い、音声がない環境では skip します。
+うち16件は任意のローカル samples/A.wav〜G.wav を使い、音声がない環境では skip します。
 GUI は offscreen、音声は実スレッドで動くデバイス代替を用いて確認します。
 
 実 Windows ウィンドウでも、既定再生先の loopback 音量表示、
@@ -238,6 +240,8 @@ Phase 4 では提供 WAV の全区間と、登録・比較を重ならない前�
 実 Windows 画面でも順位表・第1/第2候補、再起動後の登録7件、終了時の全ワーカー解放を確認しています。
 Phase 5 の98ケースでは静かな14/14を維持し、固定白色ノイズ付き音声を83/84から84/84へ改善しました。
 再評価は scripts/evaluate_phase5.py、画面のスコア内訳も実 Windows で確認しています。
+Phase 6 は曖昧な候補を unknown とし、Live の重複除外と Replay の反復判定を確認しました。
+提供音声の自己一致は7/7 HIGH、別区間は初期閾値で7/7 unknown です。
 別録音・会話や効果音を含む実戦の認識率、VoiceMeeter B1 へのゲーム音経路、物理的な切断・再接続は未検証です。
 
 ## Troubleshooting

@@ -8,6 +8,7 @@ from numpy.typing import NDArray
 import numpy as np
 
 from audio.data import AudioClip
+from audio.event import EventContext
 from audio.operations import check_cancel
 from audio.ring_buffer import RingBuffer
 from audio.waveio import read_wav
@@ -34,10 +35,12 @@ class LiveSource(AudioSource):
 
     def __init__(self, ring: RingBuffer, frames: int | None = None) -> None:
         self.ring, self.frames = ring, frames
+        self.event_context: EventContext | None = None
 
     def read(self, cancel: Event | None = None) -> AudioClip:
         check_cancel(cancel)
-        values = self.ring.snapshot(self.frames)
+        values, stream_id, timestamp, start, end = self.ring.snapshot_event(self.frames)
+        self.event_context = EventContext("live", timestamp, stream_id, start, end)
         check_cancel(cancel)
         return AudioClip(values, self.ring.sample_rate)
 

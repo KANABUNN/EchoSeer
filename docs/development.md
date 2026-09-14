@@ -386,3 +386,41 @@ Phase 5の7種類×2レートの合成音比較を別途追加した。
 
 次はPhase 6 — Confidence Engine、best threshold、margin、
 HIGH / MEDIUM / LOW / REJECTED、duplicate cooldown、uncertain event logging。
+
+
+## Phase 6 — Confidence Engine（2026-09-14）
+
+Qt に依存しない ConfidenceEngine / DetectionResult / ConfidenceLevel を追加した。
+OracleClassifier は従来の候補順位を維持し、その後に best と margin で採用を判断する。
+採用結果は OperationResult.detection.oracle、順位上の暫定候補は classification.best_candidate
+で区別する。LOW / REJECTED・比較サンプル不足は null、重複も null。
+HIGH と MEDIUM はスコアと margin の両方を満たす場合だけ採用する。
+小数の減算による境界の丸め誤差は1e-12の絶対許容誤差で扱う。
+
+audio.event.EventContext は音声窓の時刻とストリームを表す。RingBuffer.snapshot_event が
+音声・最終書込み monotonic 時刻・stream ID・フレーム範囲を一度にコピーする。
+クリア時に ID を変えて欠落前のイベント履歴を引き継がない。処理時間を重複判定に使わない。
+Live の採用時刻は Oracle ごとに保持し、重複で延長しない。過去時刻は拒否する。
+Replay は窓末尾の相対時刻を使い、Live 履歴に触れず反復判定が一致する。
+
+RecognitionRecorder は解析ワーカーでJSONLと短いnative音声を保存する。
+既存 EventLogger と atomic WAV writer を利用する。最も大きい100ms区間の前後を
+最大3秒 / 16 MiB保存し、形式・checksum・切り出し範囲を記録する。
+保存失敗は PersistenceResult.notices で返し、解析結果を失わせない。
+不正な順位はスコアをログへ持ち込まず、理由付きのREJECTEDイベントとして記録する。
+認識ログと不確かな音声は独立して切り替え、設定を保存する。フル録音は初期OFFを維持する。
+通常の診断ログで候補を確定Oracleと誤解しないよう候補詳細をdebugにした。
+
+RecognitionWidget は採用Oracle / unknown と信頼度を先に表示し、順位・内訳を維持する。
+再解析・失敗時には採用結果を消去する。保存切替は解析中に無効にする。
+認識閾値の検証はDSPのレート設定に依存させない。
+192kHz用の有効な帯域設定をConfidenceEngineが48kHz用として拒否しない回帰確認も追加した。
+
+新規69件は信頼度46 / ログ16 / 音声時刻2 / GUI4 / 任意提供音声1。
+全 **412 passed**（91.32秒）/ pip check成功。
+提供7音声の自己一致は7/7 HIGH、前後別区間は7/7正しい順位を維持して全unknown。
+初期閾値による6 REJECTED / 1 LOWであり、別録音の採用精度は未校正。
+実WindowsのHIGH・unknown・duplicate・小画面・内訳を画像検査し、全worker解放を確認した。
+詳細は docs/confidence.md と docs/acceptance.md。
+
+次は Phase 7 — Sequence FSM。連続イベントの切り出し・PASS・順序処理は未実装。

@@ -1,20 +1,30 @@
 """Candidate ranking view; component and combined similarities are not confidence probabilities."""
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import (
     QAbstractItemView, QCheckBox, QGroupBox, QHeaderView, QLabel,
-    QTableWidget, QTableWidgetItem, QVBoxLayout,
+    QTableWidget, QTableWidgetItem, QVBoxLayout, QHBoxLayout,
 )
 from config.defaults import DEFAULT_ORACLE_LABELS
 from detector.classifier import ClassificationResult
+from detector.confidence import DetectionResult
 from encounter.vog_oracles import OracleId
 
 
 class RecognitionWidget(QGroupBox):
+    event_logging_changed = Signal(bool)
+    uncertain_audio_changed = Signal(bool)
     def __init__(self, labels: dict[str, str] | None = None) -> None:
         super().__init__("Oracle 候補 · 複合スコア")
         self.labels = labels or DEFAULT_ORACLE_LABELS
         self.result: ClassificationResult | None = None
+        self.detection: DetectionResult | None = None
         layout = QVBoxLayout(self)
+        self.decision_label = QLabel()
+        self.decision_label.setTextFormat(Qt.TextFormat.PlainText)
+        self.decision_label.setWordWrap(True)
+        self.decision_label.setAccessibleName("認識結果と信頼度")
+        self.decision_label.setStyleSheet("font-weight: 600; padding: 6px; border: 1px solid #55647b; border-radius: 4px;")
+        layout.addWidget(self.decision_label)
         self.best_label = QLabel()
         self.second_label = QLabel()
         self.margin_label = QLabel()
@@ -56,6 +66,17 @@ class RecognitionWidget(QGroupBox):
         self.warning_label.setTextFormat(Qt.TextFormat.PlainText)
         self.warning_label.setWordWrap(True)
         layout.addWidget(self.warning_label)
+        logging_row = QHBoxLayout()
+        self.event_logs_checkbox = QCheckBox("認識ログを保存")
+        self.uncertain_audio_checkbox = QCheckBox("不確かな音声を保存")
+        self.event_logs_checkbox.setChecked(True)
+        self.uncertain_audio_checkbox.setChecked(True)
+        self.event_logs_checkbox.toggled.connect(self.event_logging_changed.emit)
+        self.uncertain_audio_checkbox.toggled.connect(self.uncertain_audio_changed.emit)
+        logging_row.addWidget(self.event_logs_checkbox)
+        logging_row.addWidget(self.uncertain_audio_checkbox)
+        logging_row.addStretch()
+        layout.addLayout(logging_row)
         self.clear()
 
     def _show_details(self, enabled: bool) -> None:
@@ -67,6 +88,8 @@ class RecognitionWidget(QGroupBox):
 
     def clear(self) -> None:
         self.result = None
+        self.detection = None
+        self.decision_label.setText("認識結果：— / 信頼度：—")
         self.best_label.setText("第1候補：—")
         self.second_label.setText("第2候補：—")
         self.margin_label.setText("スコア差：—")
@@ -118,3 +141,30 @@ class RecognitionWidget(QGroupBox):
             notices.append("比較サンプルなし：" + ", ".join(o.value for o in result.missing_oracles))
         self.warning_label.setText("\n".join(notices))
         self.warning_label.setVisible(bool(notices))
+
+    def set_detection(self, detection: DetectionResult | None) -> None:
+        self.detection = detection
+        if detection is None:
+            self.decision_label.setText("認識結果：— / 信頼度：—")
+            return
+        name = self._name(detection.oracle) if detection.oracle else "unknown"
+        suffix = " / 重複を除外" if detection.duplicate else ""
+        self.decision_label.setText(f"認識結果：{name} / 信頼度：{detection.status.value}{suffix}")
+        reasons = {
+            "ACCEPTED": "スコアと候補間の差が基準を満たしています。類似度は確率ではありません。",
+            "BELOW_LOW_THRESHOLD": "一致スコアが低いため Oracle を確定しません。",
+            "BELOW_CONFIDENCE_THRESHOLD": "信頼度の基準に届かないため Oracle を確定しません。",
+            "AMBIGUOUS_MARGIN": "候補間の差が小さいため Oracle を確定しません。",
+            "INCOMPLETE_BANK": "7 種すべての比較サンプルが揃うまで Oracle を確定しません。",
+            "DUPLICATE": "同じ Oracle が短時間内に再検出されました。重複候補を除外しました。",
+            "STALE_EVENT": "取得時刻が過去のイベントのため Oracle を確定しません。",
+            "INVALID_RANKING": "スコアが不正なため Oracle を確定しません。",
+        }
+        reason = reasons.get(detection.reason)
+        if reason:
+            self.status_label.setText(reason + "\n" + self.status_label.text().split("\n")[-1])
+
+    def append_notices(self, notices: tuple[str, ...]) -> None:
+        messages = [self.warning_label.text()] if self.warning_label.text() else []
+        self.warning_label.setText("\n".join([*messages, *notices]))
+        self.warning_label.show()

@@ -258,3 +258,46 @@ confidence、重複除去、連続イベント検出、VoG Sequence は後続 Ph
 
 合成音やロジックテストだけで、実 Oracle 音声の認識率・Pass 分離・
 実戦使用の完了条件を達成したとは判断しません。
+
+
+## Phase 6 — 実装・自動テスト確認済み（2026-09-14）
+
+- [x] 複合 best と第2候補の margin を両方使う HIGH / MEDIUM / LOW / REJECTED
+- [x] L2 0.83 / R1 0.82 を LOW / unknown とし、僅差を確定しない
+- [x] LOW / REJECTED・同点・比較サンプル不足・不正スコアでは採用 Oracle が null
+- [x] 閾値・margin・cooldown の設定反映、範囲・順序・有限値の検証
+- [x] Live の音声・monotonic 時刻・stream ID・フレーム範囲の同時コピー
+- [x] Oracle ごとの重複抑制、境界での解除、別 Oracle、cooldown 0、ストリーム変更
+- [x] LOW / REJECTED・除外した重複で抑制起点を変更しない
+- [x] Stop 後の同じ音声コピーを Live で再送すると重複、Replay 再解析は同じ採用結果
+- [x] Replay が Live の抑制履歴を変更しない、過去時刻の Live 候補を拒否
+- [x] JSONL に採用結果・候補・3スコア・margin・理由・音声ソース・checksum
+- [x] 日時・ログ処理 monotonic 時刻・音声イベント時刻の分離
+- [x] 候補あり LOW / REJECTED・duplicate の native WAV 保存、最大3秒 / 16 MiB
+- [x] 切り出しフレーム・チャンネル・レートを記録、float32 サンプル値を保持
+- [x] 認識ログ / 不確かな音声の保存切替を画面から操作・設定保存、両OFFでファイルを作らない
+- [x] 保存失敗でも解析・unknown 表示・手動 WAV 保存を維持し、警告を表示
+- [x] 再解析・失敗時に以前の信頼度と認識結果を消去
+- [x] Phase 6 新規69件、全 **412 passed**（91.32秒）/ pip check 成功
+
+GUI は offscreen とデバイス代替を用います。提供音声を使う16件は任意ローカル音声が
+ない環境で skip します。Phase 5 の候補順位評価98ケースも引き続き通っています。
+
+## Phase 6 — 実 Windows / 提供音声確認
+
+- [x] Qt platform windows、通常1024×820・760×600の画面と文字を画像で確認
+- [x] 既存保存先の7テンプレートと提供WAV全体を比較し、7/7 HIGH で正しい Oracle を採用
+- [x] 登録0〜1秒・比較1〜1.75秒では順位7/7を維持、6 REJECTED / 1 LOW ですべて unknown
+- [x] Phase 5 の -20 dB / seed17 B の候補 R3 / 0.119329 を REJECTED / unknown
+- [x] 提供 F.wav を有限 LiveSource バッファへコピーし、L2 採用→再送重複→Replay 再採用
+- [x] JSONL と不確かな WAV の作成、スコア内訳・unknown・重複の表示
+- [x] 元の samples/A.wav〜G.wav の SHA-256 が変更前後で一致
+- [x] 終了時に Capture / Replay / Template の全ワーカー解放、exit code 0
+
+画像と機械可読レポートは .runtime/phase6-native/ に保存し、Git 対象外です。
+この段階の Live 確認は提供WAVを入れた有限バッファで行い、実デバイスの新たな録音確認ではありません。
+自己一致は独立録音の精度評価ではありません。初期閾値は実戦データで未校正です。
+
+- [ ] 独立した Oracle 録音・会話・効果音での採用率と誤検出率
+- [ ] Destiny 2 実行中の連続イベント切り出しと重複判定
+- [ ] Phase 7 Sequence FSM と PASS / 順序の判定

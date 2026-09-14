@@ -82,7 +82,7 @@ class ReplayPage(QWidget):
         export_layout.addWidget(self.encoding_combo, 1)
         export_layout.addWidget(self.save_button)
         layout.addWidget(export_group)
-        note = QLabel("Phase 5 は波形とスペクトルによる暫定候補です。信頼度判定は次の Phase で追加します。")
+        note = QLabel("結果が unknown の音声は Oracle として確定しません。")
         note.setObjectName("subtitle")
         note.setWordWrap(True)
         layout.addWidget(note)

@@ -1,6 +1,8 @@
 """Bounded, thread-safe native-format audio storage, measured in frames."""
 
 import math
+import time
+from uuid import uuid4
 from pathlib import Path
 from threading import Event, Lock
 
@@ -18,6 +20,9 @@ class RingBuffer:
         self._data = np.empty((self.capacity_frames, channels), dtype=np.float32)
         self._position = 0
         self._size = 0
+        self._total_frames = 0
+        self._stream_id = uuid4().hex
+        self._last_write_time = 0.0
         self._lock = Lock()
 
     @property
@@ -33,6 +38,9 @@ class RingBuffer:
         with self._lock:
             self._position = 0
             self._size = 0
+            self._total_frames = 0
+            self._stream_id = uuid4().hex
+            self._last_write_time = 0.0
 
     def write(self, samples: NDArray[np.float32]) -> None:
         values = np.asarray(samples, dtype=np.float32)
@@ -42,6 +50,8 @@ class RingBuffer:
         if count == 0:
             return
         with self._lock:
+            self._total_frames += count
+            self._last_write_time = time.monotonic()
             if count >= self.capacity_frames:
                 self._data[:] = values[-self.capacity_frames:]
                 self._position = 0
@@ -55,6 +65,10 @@ class RingBuffer:
             self._size = min(self.capacity_frames, self._size + count)
 
     def snapshot(self, frames: int | None = None) -> NDArray[np.float32]:
+        return self.snapshot_event(frames)[0]
+
+    def snapshot_event(self, frames: int | None = None) -> tuple[NDArray[np.float32], str, float, int, int]:
+        """Copy frames and their stream identity/time atomically under the same lock."""
         if frames is not None and frames < 0:
             raise ValueError("Requested frames must not be negative")
         with self._lock:
@@ -65,7 +79,7 @@ class RingBuffer:
             output[:first] = self._data[start:start + first]
             if first < count:
                 output[first:] = self._data[:count - first]
-            return output
+            return output, self._stream_id, self._last_write_time, self._total_frames - count, self._total_frames
 
 
     def dump(

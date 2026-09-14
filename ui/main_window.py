@@ -17,6 +17,8 @@ from audio.sources import LiveSource
 from audio.recorder import RecordingEvent
 from encounter.vog_oracles import OracleId
 from detector.classifier import OracleClassifier
+from detector.confidence import ConfidenceEngine
+from logging_ext.recognition_logger import RecognitionRecorder
 from dsp.bandpass import BandpassSettings
 from config.manager import ConfigManager
 from config.schema import AppConfig, ConfigValidationError
@@ -101,6 +103,8 @@ class MainWindow(QMainWindow):
         self.live_page.refresh_requested.connect(self._refresh_devices)
         self.operations = operations or OperationController(
             self.settings.audio.internal_sample_rate, parent=self,
+            confidence=ConfidenceEngine(self.settings.recognition),
+            recorder=RecognitionRecorder(data_root / "logs", self.settings.logging),
         )
         self.operations.finished.connect(self._on_operation, Qt.ConnectionType.QueuedConnection)
         self.operations.busy_changed.connect(self._on_operation_busy)
@@ -122,6 +126,11 @@ class MainWindow(QMainWindow):
                 waveform_weight=recognition.waveform_weight,
                 spectrum_weight=recognition.spectrum_weight,
             )
+        recognition_view = self.replay_page.recognition
+        recognition_view.event_logs_checkbox.setChecked(self.settings.logging.event_logs)
+        recognition_view.uncertain_audio_checkbox.setChecked(self.settings.logging.uncertain_audio)
+        recognition_view.event_logging_changed.connect(self._save_event_logging)
+        recognition_view.uncertain_audio_changed.connect(self._save_uncertain_audio)
         self._record_target = None
         self._last_deleted = None
         self.templates.finished.connect(self._on_template_result, Qt.ConnectionType.QueuedConnection)
@@ -146,8 +155,23 @@ class MainWindow(QMainWindow):
             self.config_manager.save(self.settings)
         except (OSError, ConfigValidationError):
             logger.exception("Could not save audio selection")
-            self.warning_label.setText("音声デバイスの設定を保存できません。保存先を確認してください。")
+            self.warning_label.setText("設定を保存できません。保存先を確認してください。")
             self.warning_label.show()
+
+    @Slot(bool)
+    def _save_event_logging(self, enabled: bool) -> None:
+        self.settings.logging.event_logs = enabled
+        if self.operations.recorder is not None:
+            self.operations.recorder.settings.event_logs = enabled
+            self.operations.recorder.events.enabled = enabled
+        self._save_config()
+
+    @Slot(bool)
+    def _save_uncertain_audio(self, enabled: bool) -> None:
+        self.settings.logging.uncertain_audio = enabled
+        if self.operations.recorder is not None:
+            self.operations.recorder.settings.uncertain_audio = enabled
+        self._save_config()
 
     @Slot(object)
     def _save_selection(self, device: AudioDevice | None) -> None:
@@ -201,6 +225,8 @@ class MainWindow(QMainWindow):
         if self._closing:
             return
         self.replay_page.set_busy(busy)
+        self.replay_page.recognition.event_logs_checkbox.setEnabled(not busy)
+        self.replay_page.recognition.uncertain_audio_checkbox.setEnabled(not busy)
         self.live_page.set_operation_busy(busy)
 
     @Slot()
@@ -264,6 +290,9 @@ class MainWindow(QMainWindow):
         elif event.analysis is not None:
             self.replay_page.set_result(event.analysis, live=event.kind == "live")
             self.replay_page.recognition.set_result(event.classification)
+            self.replay_page.recognition.set_detection(event.detection)
+            if event.persistence is not None and event.persistence.notices:
+                self.replay_page.recognition.append_notices(event.persistence.notices)
         elif event.path is not None:
             message = f"保存しました：{event.path}"
             if event.kind == "dump":

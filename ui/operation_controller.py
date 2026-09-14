@@ -14,6 +14,8 @@ from audio.sources import AudioSource
 from audio.waveio import write_wav
 from replay.analyzer import AnalysisResult, Analyzer
 from detector.classifier import ClassificationResult, OracleClassifier
+from detector.confidence import ConfidenceEngine, DetectionResult, EventContext
+from logging_ext.recognition_logger import RecognitionRecorder, PersistenceResult
 
 logger = logging.getLogger("oracle_assistant.replay")
 
@@ -35,6 +37,8 @@ class OperationResult:
     error: str = ""
     cancelled: bool = False
     classification: ClassificationResult | None = None
+    detection: DetectionResult | None = None
+    persistence: PersistenceResult | None = None
 
 
 class OperationController(QObject):
@@ -44,10 +48,13 @@ class OperationController(QObject):
     def __init__(
         self, sample_rate: int = 48000, parent: QObject | None = None,
         analyzer: Analyzer | None = None, classifier: OracleClassifier | None = None,
+        confidence: ConfidenceEngine | None = None, recorder: RecognitionRecorder | None = None,
     ) -> None:
         super().__init__(parent)
         self.analyzer = analyzer or Analyzer(sample_rate)
         self.classifier = classifier
+        self.confidence = confidence or ConfidenceEngine()
+        self.recorder = recorder
         self._queue: Queue[OperationTask] = Queue()
         self._closing = Event()
         self._thread: Thread | None = None
@@ -105,9 +112,23 @@ class OperationController(QObject):
                     analysis = self.analyzer.analyze(task.source, self._closing)
                     classification = (self.classifier.classify_preprocessed(analysis.processed, self._closing)
                                       if self.classifier is not None else None)
-                    event = OperationResult(task.kind, analysis=analysis, classification=classification)
+                    detection = persistence = None
                     if classification is not None:
-                        logger.info("Combined ranking: status=%s oracle=%s best=%s second=%s score=%s samples=%s",
+                        context = (getattr(task.source, "event_context", None) if task.kind == "live"
+                                   else EventContext(timestamp=analysis.original.duration_seconds,
+                                                     start_frame=0, end_frame=analysis.original.frame_count))
+                        if task.kind == "live" and context is None:
+                            raise ValueError("Live confidence requires timestamped audio")
+                        detection = self.confidence.evaluate(classification, context)
+                        if self.recorder is not None:
+                            persistence = self.recorder.record(detection, classification, analysis.original,
+                                                               analysis.checksum, self._closing)
+                        logger.debug("Confidence: level=%s oracle=%s reason=%s duplicate=%s",
+                                     detection.status, detection.oracle, detection.reason, detection.duplicate)
+                    event = OperationResult(task.kind, analysis=analysis, classification=classification,
+                                            detection=detection, persistence=persistence)
+                    if classification is not None:
+                        logger.debug("Combined ranking: status=%s oracle=%s best=%s second=%s score=%s samples=%s",
                                     classification.status, classification.oracle, classification.best_score,
                                     classification.second_candidate, classification.second_score, classification.sample_count)
                     if classification is not None and classification.ranking:
