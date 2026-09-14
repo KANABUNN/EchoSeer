@@ -3,15 +3,16 @@
 Vault of Glass のゲーム音声からオラクルを識別し、順序と信頼度を表示する
 Windows アプリケーションを、指示書の Phase 順に開発しています。
 
-**Phase 7（VoG Sequence FSM）まで実装済みです。**
+**Phase 9（2回照合・VoGルール補正）まで実装済みです。**
 WASAPI Loopback / 通常録音入力の選択、Start / Stop、リアルタイム音量表示、
 リングバッファ、WAV 読み書き、共通前処理、簡易 Replay、設定保存・復旧、診断ログが動作します。
 Calibration で Oracle ごとの複数サンプル登録・録音・Import・Listen・削除・復元ができます。
 Replay と Live の直近区間で、波形とスペクトルによる Oracle 候補・複合スコア・全7種類の順位を表示します。
 HIGH / MEDIUM / LOW / REJECTED と unknown、Live の重複抑制、認識ログ・不確かな音声の保存切替を実装しました。
 Replay WAV と Live の保持音声からイベントを切り出し、Round 1〜5 の3〜7個を PASS1 / PASS2 に独立保存します。
-詳しくは [信頼度の使い方](docs/confidence.md) / [順序解析の使い方](docs/sequence.md) を確認してください。
-2回の照合、順序再構成、Calibration の詳細調整、Overlay、配布 EXE は後続 Phase で実装します。
+完全一致のCONFIRMED、不一致位置、INFERRED / CHECK、上位候補による重複なしの順序再構成に対応します。
+詳しくは [信頼度](docs/confidence.md) / [順序解析](docs/sequence.md) / [2回照合と推定](docs/verification.md) を確認してください。
+Live の全ラウンド追跡、Calibration の詳細調整、Overlay、配布 EXE は後続 Phase で実装します。
 
 ゲームへの操作送信、メモリ読み取り、DLL 注入、ゲームファイルへのアクセス、
 自動入力、Bungie API、クラウド認識、テレメトリーは実装しません。
@@ -171,8 +172,9 @@ Live の「直近音声の順序を解析」も、処理開始時にコピーし
 初期バッファは10秒なので、両PASSを含む長さが必要です。設定可能な上限は30秒です。
 より長いラウンドは Replay WAV を使ってください。順序入力は120秒以内です。
 
-両PASSが揃うと VERIFY（照合待ち）です。unknown は位置を残し、欠落や間隔不足は UNCERTAIN にします。
-Phase 8 の照合は未実装のため、この操作で CONFIRMED にはしません。
+両PASSを照合し、採用Oracleの完全一致・期待個数・重複なしを満たすと CONFIRMED と確定順を表示します。
+補正した順序は INFERRED（要確認）、決められない位置は MISMATCH / CHECK です。不一致・重複と元の候補を残します。
+unknown は位置を残し、欠落や間隔不足は UNCERTAIN にします。
 提供された個別の実 Oracle 音声を2回提示に組み、全5ラウンドの分離を確認しました。
 実戦での提示間隔・音の重なりを含む通し録音は未検証です。
 
@@ -197,7 +199,8 @@ Phase 8 の照合は未実装のため、この操作で CONFIRMED にはしま�
 - 診断ログは 5 MiB × 最大 4 ファイルです。
 - 比較には waveform_weight / spectrum_weight / template_aggregation / top_n / bandpass を使用します。
 - confidence 閾値は採用判定、detection_threshold / sequence.pass_gap / event_timeout は順序解析に使用します。
-- lockout_duration / silence_duration は FSM の確定後遷移で使用します。画面の確定処理は Phase 8 です。
+- lockout_duration / silence_duration は FSM の確定後遷移で使用します。
+- candidate_top_n / max_corrections / inference_margin / reconstruction_margin は候補保存・推定に使用します。
 - 認識ログがONなら logs/sessions/ にイベントと独立したPASSのJSONLを保存します。
 
 設定例は [config.example.json](docs/config.example.json) を参照してください。
@@ -215,7 +218,7 @@ ui/              Live / Replay / Calibration、音量表示、Qt Signal/Slot、�
 dsp/             mono・DC 除去・正規化・帯域処理・正規化相関・STFT特徴
 templates/       複数テンプレート管理（Phase 3）
 detector/        Oracle 波形/スペクトル順位・複合スコア・信頼度判定、有限音声のイベント切り出し
-encounter/       固定 OracleId、VoG の期待個数・Sequence FSM・独立PASS
+encounter/       OracleId、期待個数・Sequence FSM・独立PASS・2回照合・候補再構成
 replay/          Live / WAV 共通 Analyzer、1ラウンドの順序解析
 tests/           Unit / 音声ワーカー / GUI テスト、音声・Dataset 用フォルダー
 scripts/         セットアップ・検証・対応表によるサンプル登録
@@ -242,9 +245,9 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\verify.ps1
 .\.venv\Scripts\python.exe -m pip check
 ```
 
-Python 3.14.6 で **477 passed**、依存関係の確認も成功しています。
+Python 3.14.6 で **541 passed**、依存関係の確認も成功しています。
 自動テストは実デバイス・ゲーム・VoiceMeeter の起動を必要としません。
-うち17件は任意のローカル samples/A.wav〜G.wav を使い、音声がない環境では skip します。
+うち18件は任意のローカル samples/A.wav〜G.wav を使い、音声がない環境では skip します。
 GUI は offscreen、音声は実スレッドで動くデバイス代替を用いて確認します。
 
 実 Windows ウィンドウでも、既定再生先の loopback 音量表示、
@@ -265,6 +268,8 @@ Phase 6 は曖昧な候補を unknown とし、Live の重複除外と Replay �
 提供音声の自己一致は7/7 HIGH、別区間は初期閾値で7/7 unknown です。
 Phase 7 は個別の提供録音を2回提示に組んだ全5ラウンドと、欠落・不一致・ノイズ・途中切れ・間隔不足の計10ケースを確認しました。
 実 Windows 画面で7個の表示、有限Live音声とReplayコピーの一致、終了時の全ワーカー解放も確認しました。
+Phase 8–9 は完全一致の確定、不一致位置の特定、1箇所のLOW・重複の推定を確認しました。
+提供音声に分類誤りを注入した8ケースは、推定・同点・弱い根拠を確定表示にしません。
 別録音・会話や効果音を含む実戦の認識率、VoiceMeeter B1 へのゲーム音経路、物理的な切断・再接続は未検証です。
 
 ## Troubleshooting

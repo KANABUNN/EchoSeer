@@ -13,4 +13,4 @@ def test_supplied_oracle_two_presentation_dataset(tmp_path):
     regular=[c for c in report["cases"] if c["mode"]=="normal"]
     assert len(regular)==5
     assert [len(c["pass1"]) for c in regular]==[3,4,5,6,7]
-    assert all(c["state"]=="VERIFY" and not c["confirmed"] for c in regular)
+    assert all(c["state"]=="CONFIRMED" and c["confirmed"] for c in regular)

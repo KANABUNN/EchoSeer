@@ -37,10 +37,10 @@ def analyze(classifier,clip=None,recorder=None,context=None):
     return ReplaySequenceAnalyzer(classifier,recorder=recorder,analyzer=analyzer).analyze(analysis,source_context=context)
 
 
-def test_candidates_are_classified_as_windows_and_verify_does_not_confirm():
+def test_duplicate_candidates_are_classified_as_windows_and_do_not_confirm():
     classifier=StubClassifier()
     result=analyze(classifier)
-    assert result.snapshot.state=="VERIFY" and not result.snapshot.confirmed
+    assert result.snapshot.state=="UNCERTAIN" and not result.snapshot.confirmed
     assert len(result.traces)==6 and len(result.snapshot.pass1)==len(result.snapshot.pass2)==3
     assert max(classifier.frame_counts)<8000
     assert all(count>0 for count in classifier.frame_counts)
@@ -48,7 +48,7 @@ def test_candidates_are_classified_as_windows_and_verify_does_not_confirm():
 
 def test_low_confidence_events_keep_six_unknown_positions():
     result=analyze(StubClassifier(ranking(.83,.82)))
-    assert result.snapshot.state=="UNCERTAIN" and result.snapshot.reason=="UNKNOWN_EVENT"
+    assert result.snapshot.state=="UNCERTAIN" and result.snapshot.verification.status=="CHECK"
     assert len(result.snapshot.pass1)==len(result.snapshot.pass2)==3
     assert all(e.oracle is None for e in (*result.snapshot.pass1,*result.snapshot.pass2))
 
@@ -72,7 +72,7 @@ def test_sequence_summary_and_each_event_are_saved_separately(tmp_path):
     assert [e["index"] for e in cues]==[1,2,3,1,2,3]
     assert all(e["round"]==1 for e in cues)
     assert len(summary["pass1"])==len(summary["pass2"])==3
-    assert summary["state"]=="VERIFY" and not summary["confirmed"] and summary["final_sequence"] is None
+    assert summary["state"]=="UNCERTAIN" and not summary["confirmed"] and summary["final_sequence"] is None
     assert not result.notices
 
 
@@ -80,7 +80,7 @@ def test_live_snapshot_clock_and_frames_are_converted_without_touching_external_
     clip=two_pass_clip()
     context=EventContext("live",100,"capture",8000,8000+clip.frame_count)
     result=analyze(StubClassifier(),clip,context=context)
-    assert result.snapshot.state=="VERIFY"
+    assert result.snapshot.state=="UNCERTAIN"
     event=result.traces[0].detection
     assert event.context.source=="live" and event.context.stream_id=="capture"
     assert event.context.start_frame==8000+result.traces[0].start_frame
@@ -89,7 +89,7 @@ def test_live_snapshot_clock_and_frames_are_converted_without_touching_external_
 
 def test_logging_off_creates_no_recognition_files(tmp_path):
     recorder=RecognitionRecorder(tmp_path/"logs",LoggingSettings(event_logs=False,uncertain_audio=False))
-    assert analyze(StubClassifier(),recorder=recorder).snapshot.state=="VERIFY"
+    assert analyze(StubClassifier(),recorder=recorder).snapshot.state=="UNCERTAIN"
     assert not (tmp_path/"logs").exists()
 
 
@@ -101,7 +101,7 @@ def test_summary_write_failure_does_not_lose_passes(tmp_path,monkeypatch):
         real(event)
     monkeypatch.setattr(recorder.events,"write",write)
     result=analyze(StubClassifier(),recorder=recorder)
-    assert result.snapshot.state=="VERIFY" and len(result.snapshot.pass1)==3
+    assert result.snapshot.state=="UNCERTAIN" and len(result.snapshot.pass1)==3
     assert result.notices
 
 

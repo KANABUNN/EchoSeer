@@ -1,4 +1,4 @@
-# Phase 7 — Oracle の順序解析
+# Phase 7–9 — Oracle の順序解析
 
 Replay WAV、または Live に保持した有限音声から、1ラウンドの PASS1 と PASS2 を分離します。
 2つの列と各音の信頼度を独立して表示・保存します。通常の Analyze は1音の比較を続けます。
@@ -48,20 +48,22 @@ Next Round は解析する期待個数の選択です。
 | PASS_1 | 1回目の提示を記録中 |
 | WAIT_PASS_2 | 期待個数のPASS1を保存し、2回目を待機 |
 | PASS_2 | 2回目を独立した列に記録中 |
-| VERIFY | 両PASSが揃い、照合待ち |
+| VERIFY | 両PASSが揃い、照合中 |
 | UNCERTAIN | unknown・不足・間隔不足・タイムアウトなどの確認が必要 |
-| CONFIRMED | FSMの照合済み遷移。画面の照合はPhase 8 |
+| CONFIRMED | 両PASSの採用結果が完全一致・期待個数・重複なしで確定 |
 | LOCKOUT | 確定後、次ラウンドへ進むまで候補を追加しない |
 
-Phase 7 の画面は VERIFY（照合待ち）まで進めます。自動で CONFIRMED にしません。
-PASS同士が異なる場合もそのまま独立保存します。Phase 8 で一致・不一致を照合します。
-Phase 9 のVoG重複ルール・上位候補を使う再構成は未実装です。
+Phase 8で完全一致をCONFIRMEDにし、食い違いの位置を表示します。
+Phase 9で上位候補と重複なしのルールから推定順を組み、INFERRED（要確認）として表示します。
+同点・僅差・弱い候補・不足はMISMATCH / CHECKとして扱います。元のPASSは保持します。
+詳しくは [2回照合と推定](verification.md) を参照してください。
 
 HIGH / MEDIUM の音だけを採用し、LOW / REJECTED は unknown としてその位置を残します。
 抑制済みのduplicateは個数に含めません。1回の提示が期待個数に届く前に長い無音が来たら、
 次の提示の音で埋めず UNCERTAIN に止めます。構造が不明な列は確定しません。
 
-SequenceEngine の確定遷移フックは完全・採用済み・一致・重複なしの2列だけを受け付けます。
+SequenceEngine の確定遷移は完全・採用済み・一致・重複なしの2列だけを受け付けます。
+補正した順序はconfirmedを付けず、推定順として保持します。
 確定後はlockout_durationと連続silence_durationの両方を満たすと次Roundに進みます。
 手動Next Round / ResetもFSMに備え、5ラウンド後にRound 6を作りません。
 

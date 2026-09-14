@@ -26,7 +26,11 @@
     "lockout_duration": 10.0,
     "silence_duration": 3.0,
     "pass_gap": 2.0,
-    "event_timeout": 5.0
+    "event_timeout": 5.0,
+    "candidate_top_n": 3,
+    "max_corrections": 1,
+    "inference_margin": 0.18,
+    "reconstruction_margin": 0.1
   },
   "overlay": {
     "enabled": false,

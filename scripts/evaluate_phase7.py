@@ -1,6 +1,7 @@
 """Replay supplied Oracle audio in two presentations; timing is controlled, not a raid recording."""
 import argparse
 from hashlib import sha256
+from dataclasses import asdict
 import json
 from pathlib import Path
 import sys
@@ -81,20 +82,27 @@ def evaluate(samples_dir: Path, output_dir: Path) -> dict:
         expected_second = [mapping[source] for source in second]
         actual_first = [entry.oracle.value if entry.oracle else None for entry in snapshot.pass1]
         actual_second = [entry.oracle.value if entry.oracle else None for entry in snapshot.pass2]
-        passed = not snapshot.confirmed and snapshot.final_sequence is None
-        if mode in ("normal","mismatch"):
-            passed &= snapshot.state.value=="VERIFY" and actual_first==expected_first and actual_second==expected_second
+        if mode == "normal":
+            passed = (snapshot.confirmed and snapshot.state.value == "CONFIRMED"
+                      and [o.value for o in snapshot.final_sequence] == expected_first
+                      and actual_first == expected_first and actual_second == expected_second)
+        else:
+            passed = not snapshot.confirmed and snapshot.final_sequence is None
+        if mode == "mismatch":
+            passed &= (snapshot.verification.status.value == "MISMATCH"
+                       and snapshot.verification.mismatch_indices == (count,)
+                       and actual_first == expected_first and actual_second == expected_second)
         elif mode in ("noise","eof"):
             passed &= snapshot.state.value=="UNCERTAIN" and len(actual_first)==len(actual_second)==count
             passed &= actual_first[1] is None if mode=="noise" else actual_second[-1] is None
         elif mode == "missing":
             passed &= snapshot.state.value=="UNCERTAIN" and len(actual_first)==count-1 and not actual_second
-        else:
+        elif mode == "early":
             passed &= snapshot.reason=="EARLY_PASS_2" and not actual_second
         report = {"case":name,"round":round_index,"mode":mode,"passed":bool(passed),"wav":str(path),
                   "state":snapshot.state.value,"reason":snapshot.reason,"expected_pass1":expected_first,
                   "expected_pass2":expected_second,"pass1":actual_first,"pass2":actual_second,
-                  "confirmed":snapshot.confirmed,"final_sequence":snapshot.final_sequence,"timeline":timeline,
+                  "confirmed":snapshot.confirmed,"final_sequence":snapshot.final_sequence,"verification":asdict(snapshot.verification),"timeline":timeline,
                   "traces":[{"onset_frame":t.onset_frame,"signal_end_frame":t.signal_end_frame,
                              "window_start":t.start_frame,"window_end":t.end_frame,
                              "oracle":t.detection.oracle.value if t.detection.oracle else None,

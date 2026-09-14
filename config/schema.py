@@ -55,6 +55,10 @@ class SequenceSettings:
     silence_duration: float = 3.0
     pass_gap: float = 2.0
     event_timeout: float = 5.0
+    candidate_top_n: int = 3
+    max_corrections: int = 1
+    inference_margin: float = 0.18
+    reconstruction_margin: float = 0.10
 
 
 @dataclass(slots=True)
@@ -226,6 +230,10 @@ class AppConfig:
         _range("recognition.top_n", recognition.top_n, 1, 20)
         for name in ("lockout_duration", "silence_duration", "pass_gap", "event_timeout"):
             _range(f"sequence.{name}", getattr(self.sequence, name), 0.01, 120)
+        _range("sequence.candidate_top_n", self.sequence.candidate_top_n, 1, 7)
+        _range("sequence.max_corrections", self.sequence.max_corrections, 0, 7)
+        for name in ("inference_margin", "reconstruction_margin"):
+            _range(f"sequence.{name}", getattr(self.sequence, name), 0, 1)
         _range("overlay.width", self.overlay.width, 120, 3840)
         _range("overlay.height", self.overlay.height, 60, 2160)
         _range("overlay.opacity", self.overlay.opacity, 0.05, 1)

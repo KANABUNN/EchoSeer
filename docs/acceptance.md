@@ -249,7 +249,7 @@ confidence、重複除去、連続イベント検出、VoG Sequence は後続 Ph
 
 ## 後続 Phase — 未実装 / 未検証
 
-- Phase 8–9: 2回照合、一致、不一致、VoG重複ルール、再構成
+- Phase 8–9の実戦通し録音による採用精度・誤検出率・補正妥当性
 - 実戦通し録音での提示間隔・音の重なりを含むPass分離・採用精度
 - Phase 10–13: Live の認識表示、Oracle Map、Overlay、Calibration、Replay
 - Phase 14–16: Dataset 数値評価、実戦ログ、再接続の実戦調整、Hotkey、UX
@@ -338,4 +338,45 @@ GUI は offscreen とデバイス代替を用います。提供音声を使う16
 各声は実 Oracle 録音ですが、連結と無音・提示間隔は人工的に設定しています。
 通し録音・独立録音・会話や効果音・残響の重なりを含む実戦精度を確認した結果ではありません。
 音の重なりを1イベントとして検出すると unknown・不足になり得ます。初期閾値は未校正です。
-取得し続けるLiveの全ラウンド追跡、Phase 8の2回照合、Phase 9の再構成は後続です。
+取得し続けるLiveの全ラウンド追跡は後続です。Phase 8–9の照合・再構成は下記に記録しています。
+
+## Phase 8–9 — 実装・自動テスト確認済み（2026-09-14）
+
+- [x] PassComparator、全3〜7個の完全一致と重複なしだけCONFIRMED
+- [x] 不一致位置を1始まりで特定、4番目L3 0.96 / L2 0.61はINFERRED
+- [x] 元のPASS・全順位を保持し、上位N種類の候補履歴・信頼度・時刻を独立保存
+- [x] 同一PASSの重複、期待個数、不完全・比較不能・不正スコアを検証
+- [x] 重複なし・採用結果との一致最大・両PASS候補の支持最大・スコア総和最大の探索
+- [x] 第2候補で1箇所LOW・両PASSのLOW重複をINFERREDに補正
+- [x] 弱い候補・同点・僅差・補正上限・高信頼度の食い違い・途中切れは確定しない
+- [x] 最大7!、約13,700部分状態の探索と処理中キャンセル
+- [x] 設定4項目の範囲・型・境界、Phase 7設定の互換性と入力の非変更
+- [x] CONFIRMED / MISMATCH / INFERRED / CHECK、確定順・推定順、不一致・重複の色と候補tooltip
+- [x] JSONLにverification・mismatch_indices・候補履歴・再構成根拠・確定順/推定順を保存
+- [x] 再解析失敗・Next Round / Resetで前の照合表示・順序を消去、全ワーカー解放
+- [x] 新規64件、全 **541 passed** (158.71s) / pip check成功
+
+18件は提供ローカル録音を使う任意テストで、音声がない環境ではskipします。
+提供音声から組んだ全5ラウンドの50イベントで正しい確定順、欠落・不一致・ノイズ・EOF・
+間隔不足の5異常ケースを再確認しました。Phase 7の10ケースも現在の照合結果を検証します。
+分類スコアへの明示的な誤り注入8ケースも成功しました。
+正常だけCONFIRMED、1箇所LOW・HIGH重複・両PASS LOW重複はINFERRED、
+弱い候補・同点はCHECK、2箇所LOW・HIGHの不一致はMISMATCHです。
+補正した全ケースでconfirmed=false、final_sequence=nullを確認しました。
+
+## Phase 8–9 — 実 Windows / 提供音声確認
+
+- [x] 通常保存先の既存7テンプレートで正しいCONFIRMEDと確定順
+- [x] 提供音声の誤認識注入でINFERRED、元のunknown/候補・不一致位置・重複位置を保持
+- [x] 弱い候補・同点のCHECK、高信頼度不一致のMISMATCHを表示
+- [x] 760×700の全7個・確定順と、1024×820の状態・推定順・元のPASSを画像で確認
+- [x] 有限LiveSourceとReplayコピーで同じ確定順、メインスレッドで進捗表示
+- [x] Next Round / Reset、全ワーカー0、exit code 0
+- [x] 元WAV・既存テンプレート・config.jsonのSHA-256が前後で一致
+
+再評価は scripts/evaluate_phase7.py / scripts/evaluate_phase89.py。
+生成WAV・report.jsonは .runtime/phase89-segmentation/ / .runtime/phase89-evaluation/、
+実画面画像・report.jsonは .runtime/phase89-native/、Git対象外です。
+分類誤りは試験用に注入したものと元の順位を記録しています。実戦中の自然な誤認識を補正できた評価ではありません。
+実声の連結・無音・提示間隔は人工条件です。独立録音・残響や会話・効果音の重なりを含む
+実戦の採用率・誤検出率・補正妥当性は未検証です。Live全ラウンド追跡はPhase 10以降です。

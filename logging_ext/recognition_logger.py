@@ -128,6 +128,10 @@ class RecognitionRecorder:
                     "second_candidate": event.second_candidate.value if event.second_candidate else None,
                     "second_score": event.second_score, "margin": event.margin,
                     "onset": item.timestamp, "end": item.end_time, "reason": event.reason}
+        from dataclasses import asdict
+        verification = asdict(snapshot.verification) if snapshot.verification else None
+        if verification is not None:
+            verification["mismatch_indices"] = list(snapshot.verification.mismatch_indices)
         payload = {
             "schema_version": 1, "event_type": "sequence", "event_id": uuid4().hex,
             "event_time": snapshot.timestamp, "round": snapshot.round_index,
@@ -135,6 +139,8 @@ class RecognitionRecorder:
             "reason": snapshot.reason, "confirmed": snapshot.confirmed,
             "final_sequence": [o.value for o in snapshot.final_sequence] if snapshot.final_sequence else None,
             "pass1": [entry(item) for item in snapshot.pass1], "pass2": [entry(item) for item in snapshot.pass2],
+            "verification": verification,
+            "suggested_sequence": [o.value for o in snapshot.suggested_sequence] if snapshot.suggested_sequence else None,
             "checksum": checksum, "ignored_events": snapshot.ignored_events,
             "transitions": [{"from": t.before.value, "to": t.after.value,
                              "event_time": t.timestamp, "reason": t.reason} for t in snapshot.transitions],

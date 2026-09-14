@@ -37,3 +37,18 @@ scripts/evaluate_phase7.py は全5ラウンドと欠落・不一致・ノイズ�
 出力は .runtime/phase7-evaluation/、音声は同梱しません。
 声は実録音、無音・連結・提示間隔は人工設定です。実戦の通し録音の評価とは区別します。
 詳細は [sequence.md](../../docs/sequence.md)。
+
+## Phase 8–9 の照合・補正ケース
+
+scripts/evaluate_phase89.pyは同じ提供録音を2回提示に組み、
+特定位置に分類スコアの誤りを明示的に注入する8ケースです。
+元の順位と注入した順位を両方記録し、補正結果がCONFIRMEDにならないことを確認します。
+正常、1位置LOW、HIGH重複、両PASS LOW重複、弱い根拠、同点、2位置LOW、HIGH不一致を扱います。
+
+```powershell
+.\.venv\Scripts\python.exe scripts\evaluate_phase89.py
+```
+
+出力は .runtime/phase89-evaluation/、詳細は [verification.md](../../docs/verification.md)。
+Phase 7のレシピも現在は完全一致CONFIRMED・異常UNCERTAINの照合まで検証します。
+実戦の自然な誤認識・通し録音・独立録音の精度とは区別します。

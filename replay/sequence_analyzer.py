@@ -79,6 +79,9 @@ class ReplaySequenceAnalyzer:
             if window.reason:
                 detection = replace(detection, oracle=None, status=ConfidenceLevel.REJECTED, reason=window.reason)
             snapshot = engine.add(SequenceEntry(detection, classification, signal_end))
+            if before.state != SequenceState.WAIT_PASS_2 and snapshot.state == SequenceState.WAIT_PASS_2:
+                # PASS2 repeats PASS1; temporal duplicate history belongs to one presentation.
+                confidence.reset()
             traces.append(CueTrace(window.start_frame, window.end_frame, window.onset_frame,
                                    window.signal_end_frame, detection, classification))
             if self.recorder:
@@ -94,7 +97,8 @@ class ReplaySequenceAnalyzer:
             if snapshot.state in (SequenceState.VERIFY, SequenceState.UNCERTAIN):
                 break
         check_cancel(cancel)
-        snapshot = engine.finish(base + original.duration_seconds)
+        engine.finish(base + original.duration_seconds)
+        snapshot = engine.verify(self.recognition, cancel)
         logger.debug("Sequence: round=%s state=%s reason=%s pass1=%s pass2=%s",
                      snapshot.round_index, snapshot.state, snapshot.reason, len(snapshot.pass1), len(snapshot.pass2))
         if self.recorder:

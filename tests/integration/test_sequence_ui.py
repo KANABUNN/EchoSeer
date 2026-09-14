@@ -34,8 +34,8 @@ def test_sequence_progress_round_controls_and_failed_reanalysis(qt_app,tmp_path)
     view.set_result=set_result
     try:
         result=sequence(window,path)
-        assert result.state=="VERIFY" and not result.confirmed
-        assert "照合待ち" in view.reason_label.text()
+        assert result.state=="UNCERTAIN" and not result.confirmed
+        assert "CHECK" in view.verification_label.text()
         assert all(view.table.item(row,index).text().startswith("L2") for row in range(2) for index in range(3))
         assert threads and all(t==qt_app.thread() for t in threads)
         assert window.replay_page.save_button.isEnabled()
@@ -63,7 +63,7 @@ def test_unknown_positions_remain_visible_with_logging_off(qt_app,tmp_path):
     try:
         result=sequence(window,write_wav(tmp_path/"sequence.wav",two_pass_clip()))
         view=window.replay_page.sequence
-        assert result.state=="UNCERTAIN" and result.reason=="UNKNOWN_EVENT"
+        assert result.state=="UNCERTAIN" and result.verification.status=="CHECK"
         assert all("unknown" in view.table.item(row,index).text() for row in range(2) for index in range(3))
         assert not (window.data_root/"logs").exists()
     finally:cleanup(window,factory)
@@ -82,9 +82,9 @@ def test_live_buffer_sequence_and_replayed_copy_have_identical_passes(qt_app,tmp
         window._analyze_live_sequence()
         pump_until(lambda:not window.operations.busy and window.replay_page.sequence.result is not None)
         live=window.replay_page.sequence.result
-        assert live.state=="VERIFY" and live.pass1[0].detection.context.source=="live"
+        assert live.state=="UNCERTAIN" and live.pass1[0].detection.context.source=="live"
         replay=sequence(window)
-        assert replay.state=="VERIFY" and replay.pass1[0].detection.context.source=="replay"
+        assert replay.state=="UNCERTAIN" and replay.pass1[0].detection.context.source=="replay"
         assert [e.oracle for e in replay.pass1]==[e.oracle for e in live.pass1]
         assert [e.oracle for e in replay.pass2]==[e.oracle for e in live.pass2]
     finally:cleanup(window,factory)

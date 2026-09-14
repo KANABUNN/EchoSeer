@@ -1,4 +1,8 @@
-"""VoG presentation FSM. A later comparator supplies verification; no inference here."""
+"""VoG presentation FSM, independent verification and conservative reconstruction."""
+from __future__ import annotations
+from typing import TYPE_CHECKING
+if TYPE_CHECKING:
+    from encounter.verification import PassComparison
 from dataclasses import dataclass, replace
 from enum import StrEnum
 import math
@@ -64,10 +68,15 @@ class SequenceSnapshot:
     confirmed: bool
     ignored_events: int
     transitions: tuple[StateTransition, ...]
+    verification: PassComparison | None = None
 
     @property
     def final_sequence(self) -> tuple[OracleId, ...] | None:
         return tuple(entry.oracle for entry in self.pass1) if self.confirmed else None
+
+    @property
+    def suggested_sequence(self) -> tuple[OracleId, ...] | None:
+        return self.verification.suggested_sequence if self.verification else None
 
 
 class SequenceEngine:
@@ -83,6 +92,8 @@ class SequenceEngine:
             value = getattr(self.settings, name)
             if type(value) not in (int, float) or not math.isfinite(value) or not .01 <= value <= 120:
                 raise ValueError(f"Invalid sequence setting: {name}")
+        from encounter.verification import VerificationPolicy
+        VerificationPolicy.from_settings(self.settings)
         self.encounter = encounter
         self.reset(0.0)
 
@@ -93,6 +104,7 @@ class SequenceEngine:
         self._now, self._last_end = float(now), None
         self._silence_since = self._lockout_since = None
         self._source_key = None
+        self._verification = None
         self._confirmed, self._ignored, self.reason = False, 0, "RESET"
         return self.snapshot()
 
@@ -103,7 +115,7 @@ class SequenceEngine:
     def snapshot(self) -> SequenceSnapshot:
         return SequenceSnapshot(self.state, self.round_index, self.encounter.expected_count(self.round_index),
                                 tuple(self._pass1), tuple(self._pass2), self._now, self.reason,
-                                self._confirmed, self._ignored, tuple(self._transitions))
+                                self._confirmed, self._ignored, tuple(self._transitions), self._verification)
 
     def _clock(self, now: float) -> None:
         _time(now)
@@ -139,6 +151,7 @@ class SequenceEngine:
         self._pass1, self._pass2 = [], []
         self._last_end = self._silence_since = self._lockout_since = self._source_key = None
         self._confirmed, self._ignored = False, 0
+        self._verification = None
         self._set(SequenceState.ARMED, "NEXT_ROUND")
         return self.snapshot()
 
@@ -219,8 +232,30 @@ class SequenceEngine:
             self._set(SequenceState.UNCERTAIN, "NO_EVENTS" if not self._pass1 else "INCOMPLETE_INPUT")
         return self.snapshot()
 
+    def verify(self, recognition=None, cancel=None) -> SequenceSnapshot:
+        from encounter.pass_comparator import PassComparator
+        from encounter.reconstruction import SequenceReconstructor
+        from encounter.verification import VerificationStatus
+        if self.state not in (SequenceState.VERIFY, SequenceState.UNCERTAIN):
+            raise ValueError("Finish presentations before verification")
+        comparison = PassComparator(self.settings, recognition).compare(self._pass1, self._pass2,
+                                                                        self.encounter.expected_count(self.round_index))
+        eligible = self.state == SequenceState.VERIFY or self.reason == "UNKNOWN_EVENT"
+        if eligible:
+            comparison = SequenceReconstructor(self.settings, recognition).resolve(comparison, cancel)
+        else:
+            comparison = replace(comparison, status=VerificationStatus.CHECK, reason=self.reason,
+                                 sequence=(None,)*self.encounter.expected_count(self.round_index),
+                                 correction_indices=())
+        self._verification = comparison
+        if comparison.status == VerificationStatus.CONFIRMED:
+            return self.confirm(self._now)
+        self._confirmed = False
+        self._set(SequenceState.UNCERTAIN, comparison.reason)
+        return self.snapshot()
+
     def confirm(self, now: float) -> SequenceSnapshot:
-        """Safe transition hook for Phase 8; never invoked by the Phase 7 replay."""
+        """Only complete, equal, accepted, unique presentations can be confirmed."""
         self._clock(now)
         first, second = tuple(item.oracle for item in self._pass1), tuple(item.oracle for item in self._pass2)
         if (self.state != SequenceState.VERIFY or len(first) != self.encounter.expected_count(self.round_index)

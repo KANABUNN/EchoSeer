@@ -461,3 +461,35 @@ JSONLには音ごとのround / pass / indexとPASS全体のsummaryを別レコ�
 手順・制限は docs/sequence.md、記録は docs/acceptance.md。
 
 次は Phase 8 — PassComparator と2回照合。
+
+## Phase 8–9 — PassComparator / VoG Reconstruction（2026-09-14）
+
+Qt非依存のPassComparator、候補履歴・PassValidationとSequenceReconstructorを追加した。
+完全・採用済み・一致・重複なしの両PASSだけCONFIRMEDにし、
+元の1始まりの不一致位置を保持したまま信頼度差からINFERREDにできる。
+UNKNOWNと比較不能なイベント、同一PASS重複、期待個数を別々に記録する。
+
+各位置の上位N種類の複合・波形・スペクトルスコアを不変の候補履歴に保存する。
+元のSequenceEntry/classifier順位を変更しない。LOW第1候補の重複も疑いとして記録する。
+一意のOracle順序を探索し、採用済みの一致数、両PASSからの支持数、平均スコア総和を順に最大化する。
+一致した非重複位置を保持し、初期1位置だけ補正する。最大7!、約13,700部分状態に収まる。
+次点差・根拠不足・途中切れ・補正上限は自動採用しない。HIGH同士の僅差の不一致も、
+VoG重複ルールで解消できる場合を除いてMISMATCHに残す。補正結果はCONFIRMEDにしない。
+
+SequenceEngine.verifyをfinite入力終了後に呼び、CONFIRMEDかUNCERTAINへ遷移する。
+Snapshotにverificationとsuggested_sequenceを追加し、Next Round / Resetで消去する。
+CONFIRMED後のLOCKOUTとRound履歴はPhase 7の機能を維持する。
+JSONL summaryには両PASS・候補履歴・比較・探索根拠・確定順・推定順を保存する。
+SequenceWidgetは照合状態、不一致/重複の位置と色、元の上位候補、確定順/推定順を表示する。
+
+新しいsequence設定はcandidate_top_n=3、max_corrections=1、inference_margin=0.18、
+reconstruction_margin=0.10。旧設定へ初期値を補い、型・範囲を検証する。
+recognition.top_nのテンプレート集約とは分離する。実戦から校正した値ではない。
+
+新規64件、全 **541 passed** (158.71s) / pip check成功。
+提供音声の全5ラウンド+異常入力10ケース、分類誤り注入8ケースを検証した。
+実Windowsの4結果・全7個表示・有限Liveコピー・終了を確認し、元音声/設定/テンプレートを保持した。
+実声だがタイミングと誤り注入は人工条件で、実戦精度の確認とは区別する。
+手順はdocs/verification.md、記録はdocs/acceptance.md。
+
+次はPhase 10 — Live GUI。
