@@ -3,7 +3,7 @@
 Vault of Glass のゲーム音声からオラクルを識別し、順序と信頼度を表示する
 Windows アプリケーションを、指示書の Phase 順に開発しています。
 
-**Phase 12（連続Live認識・Oracle Map・Overlay・Calibration）まで実装済みです。**
+**Phase 15の記録・再評価機能まで実装済みです。実戦データに基づく調整は未実施です。**
 WASAPI Loopback / 通常録音入力の選択、Start / Stop、リアルタイム音量表示、
 リングバッファ、WAV 読み書き、共通前処理、簡易 Replay、設定保存・復旧、診断ログが動作します。
 Calibration で Oracle ごとの複数サンプル登録・録音・Import・Listen・削除・復元ができます。
@@ -16,7 +16,10 @@ Liveは取得中に両PASSを照合し、Round・個数・確定順／推定順�
 枠なし・最前面・クリック透過のOverlayは順序／マップを切り替え、位置・不透明度・倍率を保存します。
 CalibrationのQuality Checkで保存した元音声を再確認し、7種類の登録状況と表示名をGUIから管理できます。
 手順は [Live / Overlay](docs/live-overlay.md) / [Calibration](docs/calibration.md) を確認してください。
-後続PhaseはReplay / Debugの詳細、実戦評価、Hotkey・UX、配布EXEです。
+ReplayのTimelineで各音の時刻・理由とスコア内訳を確認し、Datasetの一括評価・比較・混同行列CSV保存ができます。
+Live / 保存ログから固定音声を開き、手動の正解・分類を付けて収集できます。採用音声の収集は初期OFFです。
+手順は [Replay / Debug](docs/replay-debug.md) / [Dataset評価](docs/dataset-evaluation.md) / [実戦記録](docs/gameplay-review.md)。
+後続PhaseはHotkey・UX、配布EXEです。
 
 ゲームへの操作送信、メモリ読み取り、DLL 注入、ゲームファイルへのアクセス、
 自動入力、Bungie API、クラウド認識、テレメトリーは実装しません。
@@ -249,9 +252,9 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\verify.ps1
 .\.venv\Scripts\python.exe -m pip check
 ```
 
-Python 3.14.6 で **606 passed**、依存関係の確認も成功しています。
+Python 3.14.6 で **674 passed**、依存関係の確認も成功しています。
 自動テストは実デバイス・ゲーム・VoiceMeeter の起動を必要としません。
-うち19件は任意のローカル samples/A.wav〜G.wav を使い、音声がない環境では skip します。
+うち20件は任意のローカル samples/A.wav〜G.wav を使い、音声がない環境では skip します。
 GUI は offscreen、音声は実スレッドで動くデバイス代替を用いて確認します。
 
 実 Windows ウィンドウでも、既定再生先の loopback 音量表示、
@@ -275,6 +278,7 @@ Phase 7 は個別の提供録音を2回提示に組んだ全5ラウンドと、�
 Phase 8–9 は完全一致の確定、不一致位置の特定、1箇所のLOW・重複の推定を確認しました。
 Phase 10–12は連続LiveとReplayの7ケース、Windowsで提供7音声のGUI登録・品質確認・Live確定／不一致を確認しました。
 Windowsのテスト用borderless画面でクリック透過・非アクティブ表示・位置調整、100% / 125% / 150%表示、全4worker解放を確認しました。
+Phase 13〜15は提供音声の15ケースで一括評価・設定比較、WindowsのTimeline・手動正解付け・ログReplay・Live固定コピーを確認しました。
 Destiny 2実行中のOverlay、物理的な複数モニター変更、長時間実戦の性能は未確認です。
 提供音声に分類誤りを注入した8ケースは、推定・同点・弱い根拠を確定表示にしません。
 別録音・会話や効果音を含む実戦の認識率、VoiceMeeter B1 へのゲーム音経路、物理的な切断・再接続は未検証です。

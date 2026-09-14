@@ -432,3 +432,40 @@ GUI録音操作はデバイス代替の入力、7個の推定表示は明示的�
 - [ ] 実ゲーム中のCalibration手動録音
 
 操作は[live-overlay.md](live-overlay.md) / [calibration.md](calibration.md)を参照してください。
+
+## Phase 13–15 — 実装・検証（2026-09-14）
+
+- [x] 全区間Timeline、時刻・元候補・信頼度・成分スコア・理由、選択行の全7順位
+- [x] native切り出しListen / Stop、反復解析の同一結果・条件、失敗時の古い結果消去
+- [x] clip / events / roundの手動正解、時刻対応付け、順序対応付け、CONFIRMEDのみ確定順成功
+- [x] 正解率・採用precision・棄却率・負例誤検出・時刻付き誤検出/分・Oracle別指標、分母なしはnull
+- [x] report.jsonとUTF-8 BOMのconfusion-matrix.csv、新規保存先・キャンセル・Windows一時ロック
+- [x] 同じDatasetの比較、WAV・正解違いの拒否、解析中のWAV・テンプレート変更の拒否
+- [x] 採用音声収集の初期OFFと独立切替、不一致の採用側証拠、1音の追加保存1回・最大14音 / 32 MiB
+- [x] 元判定と手動正解を分離、4分類・由来・メモ、元形式のCase保存・Dataset固定スナップショット
+- [x] JSONLの最新2000行、破損・範囲外音声の案内、開く時のchecksum検証
+- [x] Liveの認識世代に限定した直近音の固定コピー、Stop / Resetで古い音を消去
+- [x] 新規68件、全674 passed（321.85秒）/ pip check成功
+
+提供素材の15ケースは7単独、負例2、両PASSの全5ラウンド、時刻付き6音と背景ノイズ。
+正解63/63、採用precision 100%、余分な採用0、負例誤検出0/2、時刻付き誤検出0/分、全5ラウンド確定順が一致。
+背景unknownは3、全予測66、棄却率4.55%。既定重みと波形のみのCLI比較は全指標差0、全Oracle別差0。
+テンプレートと音声は同じ元録音、無音・提示間隔・ノイズは人工条件で、実戦精度の測定ではない。
+
+Windows 100% / 150%の独立データで、GUI登録7音、Round 5の14音、反復一致、全7内訳、native再生区間と停止を確認。
+手動ラベルを意図的にR3としたL2音を独立した正解として保存し、評価で誤認識1と表示するUI fixtureを確認した。
+28行の採用音声ログからchecksum一致のReplay、LiveでのMID音の固定コピーと空の正解欄を確認した。
+両倍率で主画面が利用可能画面内、終了時worker 0、元A〜GのSHA-256前後一致。
+表見出しのコントラスト修正と手動入力欄を150%画像で再確認した。
+選択Listenの再生対象・停止は再生デバイス代替で検証している。実際の音声出力先での聞き取りは別途確認が必要。
+
+証跡は.runtime/phase1315-verification.log / phase1315-example/ / phase1315-cli/{baseline,waveform-only}/ / phase1315-native/dpi-{1,1.5}/、Git対象外。
+再現はscripts/prepare_example_dataset.py / scripts/evaluate_dataset.pyと関連テスト。
+
+- [ ] 成功・低confidence・自然な誤認識・戦闘音が重なる実戦録音の収集と手動正解
+- [ ] 独立した実戦Datasetでの変更前後比較と、閾値・重み・帯域・テンプレートの改善確認
+
+実戦WAV・ログは未提供のため、上記2項目は未完了。既定の認識設定・アルゴリズム・既存ユーザーテンプレートを維持している。
+
+最終の表表示・手動正解入力修正後はGUI / 起動19件も成功（15.17秒）。
+空欄・区切り記号だけの入力を保存しないことと、Windows 100%の表見出し・全7Oracleの評価表示を再確認した。

@@ -12,6 +12,7 @@ from detector.confidence import ConfidenceEngine, ConfidenceLevel
 from detector.streaming import StreamingRmsDetector
 from encounter.sequence import SequenceEngine, SequenceEntry, SequenceSnapshot, SequenceState
 from replay.analyzer import Analyzer
+from logging_ext.evidence import CueEvidence,CueEvidenceCache
 
 
 @dataclass(frozen=True, slots=True)
@@ -38,6 +39,7 @@ class LiveSequenceSession:
         self._processed_frame = start_frame
         self._checksums = []
         self._blocked = False
+        self.evidence = CueEvidenceCache()
 
     def _time(self, frame: int) -> float:
         return self.origin + frame / self.rate
@@ -46,8 +48,9 @@ class LiveSequenceSession:
         self.engine.invalidate(max(self.engine.snapshot().timestamp, self._time(self.end_frame)), reason)
         snapshot = self.engine.verify(self.recognition, cancel)
         self._blocked = True
-        self._summary(snapshot, cancel)
-        return LiveResult(snapshot)
+        notices=self.evidence.save_problem(snapshot,self.recorder,cancel)
+        notices=(*notices,*self._summary(snapshot,cancel))
+        return LiveResult(snapshot,notices=tuple(notices))
 
     def _summary(self, snapshot, cancel):
         if self.recorder is None:
@@ -93,6 +96,9 @@ class LiveSequenceSession:
                 snapshot = self.engine.add(SequenceEntry(detection, raw, end))
                 if before.state != SequenceState.WAIT_PASS_2 and snapshot.state == SequenceState.WAIT_PASS_2:
                     self.confidence.reset()
+                second=before.state in (SequenceState.WAIT_PASS_2,SequenceState.PASS_2)
+                self.evidence.add(CueEvidence(window.clip,analysis.checksum,detection,raw,before.round_index,
+                    2 if second else 1,len(before.pass2 if second else before.pass1)+1))
                 self._checksums.append(analysis.checksum)
                 self._checksums = self._checksums[-14:]
                 notices = []
@@ -105,6 +111,7 @@ class LiveSequenceSession:
                     notices.extend(saved.notices)
                 if snapshot.state in (SequenceState.VERIFY, SequenceState.UNCERTAIN):
                     snapshot = self.engine.verify(self.recognition, cancel)
+                    notices.extend(self.evidence.save_problem(snapshot,self.recorder,cancel))
                     notices.extend(self._summary(snapshot, cancel))
                     self._blocked = snapshot.state == SequenceState.UNCERTAIN
                 publish(snapshot, detection, raw, notices)
@@ -113,11 +120,12 @@ class LiveSequenceSession:
                 if snapshot.state == SequenceState.UNCERTAIN and snapshot.verification is None:
                     snapshot = self.engine.verify(self.recognition, cancel)
                     self._blocked = True
-                    publish(snapshot, notices=self._summary(snapshot, cancel))
+                    publish(snapshot, notices=(*self.evidence.save_problem(snapshot,self.recorder,cancel),*self._summary(snapshot,cancel)))
                 elif snapshot.state != previous.state or snapshot.round_index != previous.round_index:
                     if snapshot.round_index != previous.round_index:
                         self.confidence.reset()
                         self._checksums.clear()
+                        self.evidence.clear()
                     publish(snapshot)
             if self._blocked:
                 break

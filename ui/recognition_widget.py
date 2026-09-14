@@ -13,6 +13,7 @@ from encounter.vog_oracles import OracleId
 class RecognitionWidget(QGroupBox):
     event_logging_changed = Signal(bool)
     uncertain_audio_changed = Signal(bool)
+    success_audio_changed = Signal(bool)
     def __init__(self, labels: dict[str, str] | None = None) -> None:
         super().__init__("Oracle 候補 · 複合スコア")
         self.labels = labels or DEFAULT_ORACLE_LABELS
@@ -68,6 +69,8 @@ class RecognitionWidget(QGroupBox):
         layout.addWidget(self.warning_label)
         logging_row = QHBoxLayout()
         self.event_logs_checkbox = QCheckBox("認識ログを保存")
+        self.success_audio_checkbox=QCheckBox("採用音声も保存（初期OFF）")
+        self.success_audio_checkbox.toggled.connect(self.success_audio_changed)
         self.uncertain_audio_checkbox = QCheckBox("不確かな音声を保存")
         self.event_logs_checkbox.setChecked(True)
         self.uncertain_audio_checkbox.setChecked(True)
@@ -75,6 +78,7 @@ class RecognitionWidget(QGroupBox):
         self.uncertain_audio_checkbox.toggled.connect(self.uncertain_audio_changed.emit)
         logging_row.addWidget(self.event_logs_checkbox)
         logging_row.addWidget(self.uncertain_audio_checkbox)
+        logging_row.addWidget(self.success_audio_checkbox)
         logging_row.addStretch()
         layout.addLayout(logging_row)
         self.clear()

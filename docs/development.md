@@ -527,3 +527,24 @@ Destiny 2実行中のOverlay、物理的な複数モニター変更、通し録�
 手順はdocs/live-overlay.md / docs/calibration.md、証跡と制限はdocs/acceptance.md。
 
 次はPhase 13 — Replay / Debug。
+
+## Phase 13–15 — Replay / Dataset / 記録（2026-09-14）
+
+全区間Timelineとnative区間Listen、条件・元テンプレートchecksumを保持する反復解析を追加した。
+Datasetのclip / events / round、時刻または順序による対応付け、Oracle別指標と混同行列、同じWAV・正解での設定比較を実装した。
+JSON / BOM付きCSVを新しいディレクトリへ一括公開し、キャンセル・既存保存先・Windows一時ロックを処理する。
+採用音声の任意収集（初期OFF）、両PASS不一致の採用側証拠、直近Live音の固定コピー、JSONL読込とchecksum検証、手動正解・分類・由来の保存を追加した。
+解析は既存Replay worker、Live証拠は最大14音 / 32 MiB。全4workerの構成を維持した。
+
+新規68件、全 **674 passed**（321.85秒）/ pip check成功。うち提供音声の任意テストは20件。
+15ケースの63Oracle、背景unknown 3、誤検出0、全5ラウンド確定順を確認した。
+既定60% / 40%と波形のみを同じDatasetでCLI比較し、全指標の差0。認識設定を変更していない。
+Windows 100% / 150%で14音Timeline・全7内訳・Listen / Stop・手動ラベル独立性・28行ログ・Live固定コピー・全worker 0を確認した。
+修正した表見出しと手動入力欄を画像確認し、元A〜GのSHA-256が前後一致した。
+
+実戦ログは未提供。Phase 15の収集・再評価機能は実装したが、実戦での閾値・帯域・重み・テンプレート調整と改善測定は未完了。
+操作はdocs/replay-debug.md / docs/dataset-evaluation.md / docs/gameplay-review.md、証跡はdocs/acceptance.md。
+次はPhase 16 — Settings / Hotkey / UX。
+
+最終の表表示・手動正解入力修正後はGUI / 起動19件も成功（15.17秒）。
+空欄・区切り記号だけの入力を保存しないことと、Windows 100%の表見出し・全7Oracleの評価表示を再確認した。

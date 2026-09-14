@@ -48,7 +48,8 @@
     "event_logs": true,
     "uncertain_audio": true,
     "full_recording": false,
-    "debug": false
+    "debug": false,
+    "success_audio": false
   },
   "oracle_labels": {
     "L1": "左1",

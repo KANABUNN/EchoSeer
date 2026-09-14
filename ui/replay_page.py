@@ -10,6 +10,8 @@ from audio.sources import AudioSource, ClipSource, WaveFileSource
 from replay.analyzer import AnalysisResult
 from ui.recognition_widget import RecognitionWidget
 from ui.sequence_widget import SequenceWidget
+from ui.timeline_widget import TimelineWidget
+from ui.review_widget import ReviewWidget
 
 
 class ReplayPage(QWidget):
@@ -49,11 +51,20 @@ class ReplayPage(QWidget):
         source_layout.addWidget(self.message_label)
         layout.addWidget(source_group)
 
+        self.timeline = TimelineWidget()
+        layout.addWidget(self.timeline)
+        self.recognition = RecognitionWidget(labels)
+        layout.addWidget(self.recognition)
+        self.review_toggle = QPushButton("誤認識・確認用の音声を保存")
+        self.review_toggle.setCheckable(True)
+        layout.addWidget(self.review_toggle)
+        self.review_widget=ReviewWidget()
+        self.review_widget.hide()
+        self.review_toggle.toggled.connect(self.review_widget.setVisible)
+        layout.addWidget(self.review_widget)
         self.sequence = SequenceWidget(labels)
         self.sequence.analyze_requested.connect(self.sequence_requested.emit)
         layout.addWidget(self.sequence)
-        self.recognition = RecognitionWidget(labels)
-        layout.addWidget(self.recognition)
         summary = QGroupBox("音声形式")
         grid = QGridLayout(summary)
         grid.setHorizontalSpacing(20)
@@ -111,12 +122,17 @@ class ReplayPage(QWidget):
         self.recognition.clear()
         self.recognition.setTitle("Oracle 候補 · 複合スコア")
         self.sequence.clear()
+        self.timeline.clear()
+        self.review_widget.set_available(False)
+        self.review_widget.set_context({})
         self.notice_label.clear()
         for labels in self.values.values():
             for label in labels:
                 label.setText("—")
 
     def begin_analysis(self) -> None:
+        self.review_widget.set_available(False)
+        self.timeline.clear()
         self.sequence.clear()
         self.recognition.clear()
         self.recognition.setTitle("Oracle 候補 · 複合スコア")
@@ -176,6 +192,9 @@ class ReplayPage(QWidget):
         self.message_label.setText(message)
 
     def _update_controls(self) -> None:
+        self.review_widget.set_available(self.result is not None and not self._busy)
+        self.timeline.set_available(self.source is not None)
+        self.timeline.set_busy(self._busy)
         self.sequence.set_available(self.source is not None)
         self.sequence.set_busy(self._busy)
         self.open_button.setEnabled(not self._busy)

@@ -12,6 +12,7 @@ from audio.data import AudioClip
 from audio.operations import OperationCancelled, check_cancel
 from audio.waveio import write_wav
 from config.schema import LoggingSettings
+from templates.manager import audio_checksum
 from detector.classifier import ClassificationResult
 from detector.confidence import ConfidenceLevel, DetectionResult
 from logging_ext.event_logger import EventLogger
@@ -49,28 +50,33 @@ def uncertain_window(clip: AudioClip, cancel: Event | None = None) -> tuple[Audi
 
 
 class RecognitionRecorder:
-    def __init__(self, logs: Path, settings: LoggingSettings | None = None) -> None:
+    def __init__(self, logs: Path, settings: LoggingSettings | None = None, conditions: dict | None = None) -> None:
         self.logs = Path(logs)
         self.settings = replace(settings or LoggingSettings())
+        self.conditions = conditions
         session = f"{datetime.now():%Y%m%d-%H%M%S}-{uuid4().hex}"
         self.events = EventLogger(self.logs / "sessions" / f"{session}.jsonl", self.settings.event_logs)
 
     def record(self, detection: DetectionResult, classification: ClassificationResult,
                original: AudioClip, checksum: str, cancel: Event | None = None,
-               sequence: dict | None = None) -> PersistenceResult:
+               sequence: dict | None = None, problem_reason: str | None = None) -> PersistenceResult:
         check_cancel(cancel)
         event_id = uuid4().hex
         wall_time = time.time()
         notices, audio_path, bounds = [], None, None
         uncertain = (detection.best_candidate is not None
                      and (detection.duplicate or detection.status in (ConfidenceLevel.LOW, ConfidenceLevel.REJECTED)))
-        if self.settings.uncertain_audio and uncertain and original.frame_count:
+        save_uncertain=self.settings.uncertain_audio and (uncertain or problem_reason is not None)
+        save_success=self.settings.success_audio and detection.accepted and not detection.duplicate
+        audio_checksum_value=None
+        if (save_uncertain or save_success) and original.frame_count:
             try:
                 clip, start, end = uncertain_window(original, cancel)
                 destination = self.logs / "audio" / f"{datetime.fromtimestamp(wall_time):%Y-%m-%d}" / f"{event_id}.wav"
                 check_cancel(cancel)
                 destination.parent.mkdir(parents=True, exist_ok=True)
                 audio_path = write_wav(destination, clip, "float32", cancel)
+                audio_checksum_value=audio_checksum(clip)
                 bounds = {"start_frame": start, "end_frame": end,
                           "sample_rate": original.sample_rate, "channels": original.channels}
             except OperationCancelled:
@@ -81,7 +87,7 @@ class RecognitionRecorder:
         event_path = None
         if self.settings.event_logs:
             payload = {
-                "schema_version": 1, "event_type": "oracle", "event_id": event_id, "timestamp": wall_time,
+                "schema_version": 1, "event_type": "audio_evidence" if problem_reason else "oracle", "event_id": event_id, "timestamp": wall_time,
                 "round": sequence.get("round") if sequence else None,
                 "pass": sequence.get("pass") if sequence else None,
                 "index": sequence.get("index") if sequence else None,
@@ -103,6 +109,9 @@ class RecognitionRecorder:
                            if detection.reason != "INVALID_RANKING" else [],
                 "weights": {"waveform": classification.waveform_weight, "spectrum": classification.spectrum_weight},
                 "audio_path": str(audio_path.relative_to(self.logs)) if audio_path else None,
+                "audio_native_checksum": audio_checksum_value, "conditions": self.conditions,
+                "problem_reason": problem_reason,
+                "audio_save_reason": "pass_issue" if problem_reason else "uncertain" if save_uncertain else "accepted_example" if save_success else None,
                 "audio_window": bounds, "notices": [*classification.notices, *notices],
             }
             try:

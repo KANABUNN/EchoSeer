@@ -1,6 +1,6 @@
 """Main window with live audio controls and asynchronous clean shutdown."""
 
-from dataclasses import replace
+from dataclasses import replace,asdict
 from datetime import datetime
 import logging
 from pathlib import Path
@@ -14,7 +14,7 @@ from audio.backend import AudioDevice
 from audio.device_manager import DeviceCatalog
 from audio.level import AudioLevel
 from audio.service import CaptureStatus
-from audio.sources import LiveSource
+from audio.sources import LiveSource,ClipSource
 from audio.recorder import RecordingEvent
 from encounter.vog_oracles import OracleId
 from detector.classifier import OracleClassifier
@@ -30,10 +30,13 @@ from ui.overlay import OverlayWindow
 from ui.overlay_settings import OverlaySettingsDialog
 from ui.oracle_map import copy_positions
 from ui.presentation import present
+from replay.timeline import cue_clip
 from ui.theme import DARK_STYLE
 from ui.operation_controller import OperationController, OperationResult
 from ui.replay_page import ReplayPage
 from ui.calibration_page import CalibrationPage
+from ui.evaluation_page import EvaluationPage
+from ui.review_page import ReviewPage
 from ui.template_controller import TemplateController, TemplateTask, TemplateResult
 
 logger = logging.getLogger("oracle_assistant.ui")
@@ -93,6 +96,16 @@ class MainWindow(QMainWindow):
         self.calibration_scroll.setFrameShape(QScrollArea.Shape.NoFrame)
         self.calibration_scroll.setWidget(self.calibration_page)
         self.tabs.addTab(self.calibration_scroll, "Calibration")
+        self.evaluation_page=EvaluationPage()
+        self.evaluation_scroll=QScrollArea()
+        self.evaluation_scroll.setWidgetResizable(True)
+        self.evaluation_scroll.setWidget(self.evaluation_page)
+        self.tabs.addTab(self.evaluation_scroll,"評価")
+        self.review_page=ReviewPage()
+        self.review_scroll=QScrollArea()
+        self.review_scroll.setWidgetResizable(True)
+        self.review_scroll.setWidget(self.review_page)
+        self.tabs.addTab(self.review_scroll,"記録")
         layout.addWidget(self.tabs, stretch=1)
         self.setCentralWidget(central)
         exit_action = QAction("終了", self)
@@ -112,11 +125,28 @@ class MainWindow(QMainWindow):
         self.operations = operations or OperationController(
             self.settings.audio.internal_sample_rate, parent=self,
             confidence=ConfidenceEngine(self.settings.recognition),
-            recorder=RecognitionRecorder(data_root / "logs", self.settings.logging),
+            recorder=RecognitionRecorder(data_root / "logs", self.settings.logging, conditions={"sample_rate":self.settings.audio.internal_sample_rate,"recognition":asdict(self.settings.recognition)}),
             sequence_settings=self.settings.sequence,
         )
         self.operations.finished.connect(self._on_operation, Qt.ConnectionType.QueuedConnection)
         self.operations.busy_changed.connect(self._on_operation_busy)
+        self.operations.evaluation_progress.connect(self.evaluation_page.set_progress,Qt.ConnectionType.QueuedConnection)
+        self.evaluation_page.open_requested.connect(self._open_dataset)
+        self.evaluation_page.baseline_requested.connect(self._open_baseline)
+        self.evaluation_page.evaluate_requested.connect(self._evaluate_dataset)
+        self.evaluation_page.export_requested.connect(self._export_evaluation)
+        self.evaluation_page.cancel_requested.connect(self.operations.cancel_current)
+        self.replay_page.review_widget.save_requested.connect(self._save_review_case)
+        self.review_page.open_requested.connect(self._open_logs)
+        self.review_page.replay_requested.connect(self._replay_log_audio)
+        self.review_page.evaluate_requested.connect(self._evaluate_review_cases)
+        self.review_page.cancel_requested.connect(self.operations.cancel_current)
+        self.live_page.review_button.clicked.connect(lambda:self._review_live(False))
+        self.live_page.incorrect_button.clicked.connect(lambda:self._review_live(True))
+        self.replay_page.timeline.analyze_requested.connect(self._analyze_timeline)
+        self.replay_page.timeline.selection_changed.connect(self._select_timeline_cue)
+        self.replay_page.timeline.listen_requested.connect(self._listen_timeline_cue)
+        self.replay_page.timeline.stop_requested.connect(self.operations.stop_playback)
         self.replay_page.open_requested.connect(self._open_wave)
         self.replay_page.analyze_requested.connect(self._analyze_wave)
         self.replay_page.sequence_requested.connect(self._analyze_sequence)
@@ -140,7 +170,7 @@ class MainWindow(QMainWindow):
             )
         self.recognizer = recognizer or LiveController(
             self._make_live_classifier, self.settings.recognition, self.settings.sequence,
-            RecognitionRecorder(data_root / "logs", self.settings.logging), parent=self,
+            RecognitionRecorder(data_root / "logs", self.settings.logging, conditions={"sample_rate":self.settings.audio.internal_sample_rate,"recognition":asdict(self.settings.recognition)}), parent=self,
         )
         self.recognizer.updated.connect(self._on_live_update, Qt.ConnectionType.QueuedConnection)
         self.live_page.dashboard.round_requested.connect(self._select_live_round)
@@ -165,6 +195,10 @@ class MainWindow(QMainWindow):
         recognition_view = self.replay_page.recognition
         recognition_view.event_logs_checkbox.setChecked(self.settings.logging.event_logs)
         recognition_view.uncertain_audio_checkbox.setChecked(self.settings.logging.uncertain_audio)
+        recognition_view.success_audio_checkbox.setChecked(self.settings.logging.success_audio)
+        self.review_page.success_checkbox.setChecked(self.settings.logging.success_audio)
+        recognition_view.success_audio_changed.connect(self._save_success_audio)
+        self.review_page.success_audio_changed.connect(self._save_success_audio)
         recognition_view.event_logging_changed.connect(self._save_event_logging)
         recognition_view.uncertain_audio_changed.connect(self._save_uncertain_audio)
         self._record_target = None
@@ -212,6 +246,7 @@ class MainWindow(QMainWindow):
     def _on_live_update(self, update):
         if self._closing or update.generation != self.recognizer.generation:
             return
+        self.live_page.set_review_available(self._capture_live and self.recognizer.latest_cue is not None)
         view = self.live_page.dashboard.set_result(update.result.snapshot, update.message)
         if update.result.notices:
             self.live_page.message_label.setText("\n".join(update.result.notices))
@@ -225,6 +260,7 @@ class MainWindow(QMainWindow):
         self._clear_live_view(round_index)
 
     def _clear_live_view(self, round_index=None, message=""):
+        self.live_page.set_review_available(False)
         self.live_page.dashboard.clear(round_index, message)
         if hasattr(self, "overlay"):
             self.overlay.set_result(present(self.live_page.dashboard.result, message))
@@ -273,6 +309,16 @@ class MainWindow(QMainWindow):
             self.warning_label.setText("設定を保存できません。保存先を確認してください。")
             self.warning_label.show()
             return False
+
+    @Slot(bool)
+    def _save_success_audio(self,enabled):
+        self.settings.logging.success_audio=enabled
+        self.recognizer.set_logging(self.settings.logging)
+        if self.operations.recorder is not None:
+            self.operations.recorder.settings.success_audio=enabled
+        for checkbox in (self.replay_page.recognition.success_audio_checkbox,self.review_page.success_checkbox):
+            checkbox.blockSignals(True);checkbox.setChecked(enabled);checkbox.blockSignals(False)
+        self._save_config()
 
     @Slot(bool)
     def _save_event_logging(self, enabled: bool) -> None:
@@ -367,16 +413,122 @@ class MainWindow(QMainWindow):
         if self._closing:
             return
         self.replay_page.set_busy(busy)
+        self.replay_page.timeline.set_playing(self.operations.playing)
+        self.evaluation_page.set_busy(busy)
+        self.review_page.set_busy(busy)
         self.replay_page.recognition.event_logs_checkbox.setEnabled(not busy)
         self.replay_page.recognition.uncertain_audio_checkbox.setEnabled(not busy)
         self.live_page.set_operation_busy(busy)
         self._update_live_pause()
+
+    def _review_live(self,incorrect=False):
+        cue=self.recognizer.latest_cue
+        if cue is None:
+            self.live_page.message_label.setText("保存できる直近の認識音がありません。");self.live_page.message_label.show();return
+        page=self.replay_page
+        page.source=ClipSource(cue.clip)
+        page.path_label.setText("Liveの認識イベント（固定コピー）")
+        if self.operations.analyze(page.source):
+            page.begin_analysis()
+            page.review_widget.set_context({"description":f"元のLive判定：{cue.detection.status.value} / {cue.detection.reason}",
+                "source":asdict(cue.detection.context),"original_reason":cue.detection.reason,
+                "original_detection":asdict(cue.detection),
+                "original_ranking":[{"oracle":r.oracle.value,"combined":r.score,"waveform":r.waveform_score,"spectrum":r.spectrum_score} for r in cue.classification.ranking]},incorrect)
+            if incorrect:page.review_toggle.setChecked(True)
+            self.tabs.setCurrentIndex(1)
+
+    @Slot()
+    def _save_review_case(self):
+        page=self.replay_page
+        if page.result is None:return
+        try:annotation=page.review_widget.annotation()
+        except ValueError as error:
+            page.message_label.setText(str(error));return
+        trace=page.timeline.selected_trace
+        bounds=(trace.start_frame,trace.end_frame) if trace and page.review_widget.scope_combo.currentData()=="selected" else None
+        observed={"context":page.review_widget.context,"processed_checksum":page.result.checksum,
+            "conditions":{"sample_rate":self.operations.analyzer.sample_rate,"recognition":asdict(self.settings.recognition)}}
+        if page.timeline.result:
+            observed["profile"]=page.timeline.result.profile
+        if trace:
+            observed["selected_reason"]=trace.detection.reason
+            observed["ranking"]=[{"oracle":r.oracle.value,"combined":r.score,"waveform":r.waveform_score,"spectrum":r.spectrum_score} for r in trace.classification.ranking]
+        self.operations.save_review_case(ClipSource(page.result.original),self.data_root/"review"/"cases",annotation,observed,bounds)
+
+    @Slot()
+    def _open_logs(self):
+        folder=QFileDialog.getExistingDirectory(self,"ログの保存フォルダー",str(self.data_root/"logs"))
+        if folder:self.operations.read_logs(Path(folder))
+
+    @Slot()
+    def _replay_log_audio(self):
+        page=self.review_page
+        event=page.selected_event
+        if event and self.operations.analyze_log_audio(page.catalog.root,event.audio_relative,event.payload.get("audio_native_checksum")):
+            replay=self.replay_page;replay.source=None;replay.begin_analysis()
+            replay.path_label.setText(f"保存ログ：{event.audio_relative}")
+            p=event.payload
+            replay.review_widget.set_context({"description":f"元の判定：{p.get("confidence_level")} / {p.get("reason")}",
+                "original_log":p},bool(p.get("problem_reason")))
+            self.tabs.setCurrentIndex(1)
+
+    @Slot()
+    def _evaluate_review_cases(self):
+        self.operations.snapshot_review_cases(self.data_root/"review"/"cases")
+
+    @Slot()
+    def _open_dataset(self):
+        path,_=QFileDialog.getOpenFileName(self,"Datasetを開く",str(self.data_root),"JSON (*.json)")
+        if path:
+            self.evaluation_page.set_dataset(Path(path))
+
+    @Slot()
+    def _open_baseline(self):
+        path,_=QFileDialog.getOpenFileName(self,"比較元レポートを開く",str(self.data_root),"JSON (*.json)")
+        if path:
+            self.evaluation_page.set_baseline(Path(path))
+
+    @Slot()
+    def _evaluate_dataset(self):
+        page=self.evaluation_page
+        if page.dataset_path and self.operations.evaluate_dataset(page.dataset_path,page.baseline_path):
+            page.begin()
+
+    @Slot()
+    def _export_evaluation(self):
+        page=self.evaluation_page
+        if page.report:
+            folder=QFileDialog.getExistingDirectory(self,"レポートの保存先",str(self.data_root))
+            if folder:
+                self.operations.export_evaluation(page.report,Path(folder)/f"evaluation-{uuid4().hex}")
 
     @Slot()
     def _open_wave(self) -> None:
         path, _ = QFileDialog.getOpenFileName(self, "WAV を開く", str(self.data_root), "WAV (*.wav *.WAV)")
         if path:
             self.replay_page.set_wave_path(Path(path))
+
+    @Slot()
+    def _analyze_timeline(self):
+        page=self.replay_page
+        if page.source is not None and self.operations.analyze_timeline(page.source):
+            page.begin_analysis()
+
+    @Slot(int)
+    def _select_timeline_cue(self, row):
+        page=self.replay_page
+        trace=page.timeline.selected_trace
+        if trace is not None:
+            page.recognition.set_result(trace.classification)
+            page.recognition.set_detection(trace.detection)
+            page.recognition.setTitle("選択した音の候補 · 複合スコア")
+
+    @Slot()
+    def _listen_timeline_cue(self):
+        page=self.replay_page
+        trace=page.timeline.selected_trace
+        if trace is not None and page.result is not None:
+            self.operations.listen(cue_clip(page.result.original, trace))
 
     @Slot()
     def _analyze_wave(self) -> None:
@@ -441,6 +593,30 @@ class MainWindow(QMainWindow):
     def _on_operation(self, event: OperationResult) -> None:
         if self._closing:
             return
+        if event.kind in ("logs","case_save","case_dataset"):
+            if event.error or event.cancelled:
+                target=self.replay_page.message_label if event.kind=="case_save" else self.review_page.message_label
+                target.setText(event.error or "処理を中止しました。")
+            elif event.log_catalog is not None:
+                self.review_page.set_catalog(event.log_catalog)
+            elif event.kind=="case_save" and event.path:
+                self.replay_page.message_label.setText(f"正解付き音声を保存しました：{event.path.parent}")
+                self.review_page.message_label.setText("手動記録を一括評価できます。")
+            elif event.kind=="case_dataset" and event.path:
+                self.evaluation_page.set_dataset(event.path)
+                self.evaluation_page.set_baseline(None)
+                self.tabs.setCurrentIndex(3)
+                self._evaluate_dataset()
+            return
+        if event.kind in ("dataset","report_export"):
+            page=self.evaluation_page
+            if event.error or event.cancelled:
+                page.message_label.setText(event.error or "処理を中止しました。")
+            elif event.report is not None:
+                page.set_report(event.report)
+            elif event.path is not None:
+                page.message_label.setText(f"レポートとCSVを保存しました：{event.path.parent}")
+            return
         if (event.error or event.cancelled) and event.kind in ("sequence", "live_sequence"):
             self.replay_page.sequence.clear()
         if event.error:
@@ -451,14 +627,20 @@ class MainWindow(QMainWindow):
         elif event.cancelled:
             self.replay_page.show_error("処理を中止しました。")
         elif event.analysis is not None:
+            if event.kind=="log_audio":
+                self.replay_page.source=ClipSource(event.analysis.original)
             self.replay_page.set_result(event.analysis, live=event.kind in ("live", "live_sequence"))
             self.replay_page.recognition.set_result(event.classification)
             self.replay_page.recognition.set_detection(event.detection)
+            if event.timeline is not None:
+                self.replay_page.timeline.set_result(event.timeline, event.analysis.original.sample_rate)
             if event.sequence is not None:
                 self.replay_page.recognition.setTitle("最後の音の候補 · 複合スコア")
                 self.replay_page.sequence.set_result(event.sequence.snapshot)
             if event.persistence is not None and event.persistence.notices:
                 self.replay_page.recognition.append_notices(event.persistence.notices)
+        elif event.kind == "listen":
+            self.replay_page.message_label.setText("選択音の再生を終えました。")
         elif event.path is not None:
             message = f"保存しました：{event.path}"
             if event.kind == "dump":

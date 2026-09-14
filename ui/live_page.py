@@ -39,6 +39,7 @@ class LivePage(QWidget):
         """)
         self.settings = settings
         self._buffer_available = self._operation_busy = False
+        self._review_available = False
         self._catalog = None
         self._state = "STOPPED"
         self._status_message = self._selection_problem = ""
@@ -61,6 +62,8 @@ class LivePage(QWidget):
         self.device_combo.setSizeAdjustPolicy(QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon)
         self.device_combo.setMinimumContentsLength(25)
         self.refresh_button = QPushButton("再検索")
+        self.review_button=QPushButton("直近の音をReplayで確認")
+        self.incorrect_button=QPushButton("Incorrect（直近の音）")
         self.format_label = QLabel("デバイス未選択")
         self.format_label.setObjectName("deviceInfo")
         self.format_label.setWordWrap(True)
@@ -112,7 +115,13 @@ class LivePage(QWidget):
         self.details_button.setCheckable(True)
         layout.addWidget(self.details_button)
         self.snapshot_widget = QWidget()
-        snapshot_row = QHBoxLayout(self.snapshot_widget)
+        snapshot_column = QVBoxLayout(self.snapshot_widget)
+        review_row=QHBoxLayout()
+        review_row.addWidget(self.review_button)
+        review_row.addWidget(self.incorrect_button)
+        snapshot_column.addLayout(review_row)
+        snapshot_row=QHBoxLayout()
+        snapshot_column.addLayout(snapshot_row)
         self.replay_button = QPushButton("直近音声を Replay へ")
         self.dump_button = QPushButton("直近音声を WAV 保存")
         self.sequence_button = QPushButton("直近音声の順序を解析")
@@ -217,6 +226,12 @@ class LivePage(QWidget):
         self.replay_button.setEnabled(snapshot_enabled)
         self.dump_button.setEnabled(snapshot_enabled)
         self.sequence_button.setEnabled(snapshot_enabled)
+        self.review_button.setEnabled(self._review_available and not self._operation_busy)
+        self.incorrect_button.setEnabled(self._review_available and not self._operation_busy)
+
+    def set_review_available(self,available):
+        self._review_available=available
+        self._update_controls()
 
     def _update_message(self) -> None:
         text = self._selection_problem or self._status_message

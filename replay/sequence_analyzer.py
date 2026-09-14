@@ -14,6 +14,7 @@ from detector.events import RmsEventDetector
 from encounter.sequence import SequenceEngine, SequenceSnapshot, SequenceEntry, SequenceState
 from logging_ext.recognition_logger import RecognitionRecorder
 from replay.analyzer import AnalysisResult, Analyzer
+from logging_ext.evidence import CueEvidence,CueEvidenceCache
 
 logger = logging.getLogger("oracle_assistant.sequence")
 MAX_SEQUENCE_SECONDS = 120.0
@@ -62,6 +63,7 @@ class ReplaySequenceAnalyzer:
         if progress:
             progress(engine.snapshot())
         traces, notices = [], []
+        evidence = CueEvidenceCache()
         for window in detector.detect(original, cancel):
             check_cancel(cancel)
             onset = base + window.onset_frame / original.sample_rate
@@ -84,7 +86,10 @@ class ReplaySequenceAnalyzer:
                 confidence.reset()
             traces.append(CueTrace(window.start_frame, window.end_frame, window.onset_frame,
                                    window.signal_end_frame, detection, classification))
+            pass_number = 2 if before.state in (SequenceState.WAIT_PASS_2,SequenceState.PASS_2) else 1
+            index = len(before.pass2 if pass_number==2 else before.pass1)+1
             if self.recorder:
+                evidence.add(CueEvidence(window.clip,cue_analysis.checksum,detection,classification,round_index,pass_number,index))
                 pass_number = 2 if before.state in (SequenceState.WAIT_PASS_2, SequenceState.PASS_2) else 1
                 index = len(before.pass2 if pass_number == 2 else before.pass1) + 1
                 persisted = self.recorder.record(detection, classification, window.clip, cue_analysis.checksum, cancel,
@@ -102,6 +107,7 @@ class ReplaySequenceAnalyzer:
         logger.debug("Sequence: round=%s state=%s reason=%s pass1=%s pass2=%s",
                      snapshot.round_index, snapshot.state, snapshot.reason, len(snapshot.pass1), len(snapshot.pass2))
         if self.recorder:
+            notices.extend(evidence.save_problem(snapshot,self.recorder,cancel))
             saved = self.recorder.record_sequence(snapshot, analysis.checksum, cancel)
             notices.extend(saved.notices)
         if progress:

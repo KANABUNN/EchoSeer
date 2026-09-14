@@ -79,6 +79,7 @@ class OverlaySettings:
 class LoggingSettings:
     event_logs: bool = True
     uncertain_audio: bool = True
+    success_audio: bool = False
     full_recording: bool = False
     debug: bool = False
 

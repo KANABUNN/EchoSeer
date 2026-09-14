@@ -50,3 +50,9 @@ QLabel#audioMessage { color: #c4cfdf; }
 QProgressBar { background: #182234; border: 1px solid #55647b; border-radius: 5px; }
 QProgressBar::chunk { background: #76d7ff; border-radius: 4px; }
 """
+
+DARK_STYLE += """
+QTableWidget { background: #111827; color: #f3f4f6; gridline-color: #38455c; selection-background-color: #334967; selection-color: #ffffff; }
+QHeaderView::section { background: #182234; color: #e4ecf8; border: 1px solid #38455c; padding: 6px; }
+QTableCornerButton::section { background: #182234; border: 1px solid #38455c; }
+"""

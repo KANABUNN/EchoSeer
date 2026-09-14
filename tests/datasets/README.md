@@ -66,3 +66,11 @@ scripts/evaluate_live.pyはPhase 7の音声レシピを連続Liveへ渡します
 出力は.runtime/live-evaluation/。提供音声がある場合はtest_live_dataset.pyでも実行します。
 音声とテンプレートは同じ元録音、無音・連結・提示間隔は人工条件です。
 独立録音や実戦の通し録音での精度とは区別します。詳細は[live-overlay.md](../../docs/live-overlay.md)。
+
+## Phase 14–15のラベル付き評価
+
+scripts/prepare_example_dataset.pyは元A〜Gを保ち、単独音7、負例2、両PASSの全5ラウンド、時刻付き6音とノイズの15ケースを生成します。
+正解はdocs/sample-mapping.jsonと元音声の挿入時刻から作り、認識結果から生成しません。
+scripts/evaluate_dataset.pyで評価・比較・report.json / confusion-matrix.csv保存を行います。
+テンプレートと音声は同じ元録音、提示間隔・無音・ノイズは人工条件です。
+[Dataset評価](../../docs/dataset-evaluation.md) / [手動記録](../../docs/gameplay-review.md)を参照してください。

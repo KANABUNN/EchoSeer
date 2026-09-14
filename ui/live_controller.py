@@ -45,6 +45,12 @@ class LiveController(QObject):
         self._state = LiveControl(0, None, 1, "", "", Event())
         self._lock, self._wake, self._closing = Lock(), Event(), Event()
         self._thread = None
+        self._last_cue = None
+
+    @property
+    def latest_cue(self):
+        with self._lock:
+            return self._last_cue
 
     @property
     def generation(self):
@@ -59,6 +65,7 @@ class LiveController(QObject):
         with self._lock:
             if self._closing.is_set():
                 return
+            self._last_cue = None
             old = self._state
             old.cancel.set()
             self._state = replace(old, generation=old.generation + 1, cancel=Event(), **values)
@@ -100,10 +107,11 @@ class LiveController(QObject):
             self._thread.join(timeout)
         return not self.is_alive
 
-    def _emit(self, state, result, message=""):
+    def _emit(self, state, result, message="", cue=None):
         if not self._closing.is_set() and not state.cancel.is_set():
             with self._lock:
                 if self._state.generation == state.generation:
+                    self._last_cue = cue
                     self._state = replace(self._state, round_index=result.snapshot.round_index)
             self.updated.emit(LiveUpdate(state.generation, result, message))
 
@@ -154,7 +162,7 @@ class LiveController(QObject):
                         self._emit(state, session.invalidate(reason, state.cancel))
                         stream_id = read.stream_id
                     elif len(read.samples):
-                        session.feed(read.samples, state.cancel, lambda result: self._emit(state, result))
+                        session.feed(read.samples, state.cancel, lambda result: self._emit(state,result,cue=session.evidence.latest))
                         continue
             except OperationCancelled:
                 continue
