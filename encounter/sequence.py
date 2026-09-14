@@ -166,7 +166,7 @@ class SequenceEngine:
             self._set(SequenceState.LOCKOUT, "LOCKOUT")
         if self.state == SequenceState.LOCKOUT:
             quiet = self._silence_since is not None and _elapsed(self._now - self._silence_since, self.settings.silence_duration)
-            if _elapsed(self._now - self._lockout_since, self.settings.lockout_duration) and quiet:
+            if self.settings.auto_advance and _elapsed(self._now - self._lockout_since, self.settings.lockout_duration) and quiet:
                 return self.next_round(self._now)
         elif self._last_end is not None:
             gap = self._now - self._last_end

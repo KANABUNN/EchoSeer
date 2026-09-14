@@ -25,10 +25,18 @@ RECONNECT_INTERVAL = 2.0
 
 
 @dataclass(frozen=True, slots=True)
+class CapturePolicy:
+    buffer_duration: float
+    retry_seconds: float
+    auto_reconnect: bool
+
+
+@dataclass(frozen=True, slots=True)
 class CaptureStatus:
     state: str
     message: str = ""
     device: AudioDevice | None = None
+    detail: str = ""
 
 
 AudioEvent = DeviceCatalog | CaptureStatus | AudioLevel | RecordingEvent
@@ -45,7 +53,10 @@ class CaptureService:
         self._buffer_duration = buffer_duration
         self._manager = manager or DeviceManager()
         self._retry_seconds = retry_seconds
-        self._commands: Queue[tuple[str, AudioDevice | RecordingRequest | None]] = Queue()
+        self._auto_reconnect = True
+        self._retry_count = 0
+        self._wanted = Event()
+        self._commands: Queue[tuple[str, AudioDevice | RecordingRequest | CapturePolicy | None]] = Queue()
         self._closing = Event()
         self._thread_lock = Lock()
         self._thread: Thread | None = None
@@ -89,11 +100,26 @@ class CaptureService:
 
     def start(self, device: AudioDevice) -> None:
         self.start_worker()
+        self._wanted.set()
         self._commands.put(("start", device))
 
     def stop(self) -> None:
+        self._wanted.clear()
         if not self._closing.is_set():
             self._commands.put(("stop", None))
+
+    @property
+    def wants_capture(self) -> bool:
+        return self._wanted.is_set() and not self._closing.is_set()
+
+    def configure(self, buffer_duration: float, retry_seconds: float, auto_reconnect: bool) -> None:
+        if not 5 <= buffer_duration <= 30 or not .25 <= retry_seconds <= 60 or type(auto_reconnect) is not bool:
+            raise ValueError("Invalid capture policy")
+        self._commands.put(("configure", CapturePolicy(buffer_duration, retry_seconds, auto_reconnect)))
+
+    def retry(self) -> None:
+        if self.wants_capture:
+            self._commands.put(("retry", None))
 
     def record(self, seconds: float, token: str) -> None:
         self.start_worker()
@@ -103,6 +129,7 @@ class CaptureService:
         self._commands.put(("cancel_record", None))
 
     def shutdown(self, timeout: float = 5.0) -> bool:
+        self._wanted.clear()
         self._closing.set()
         if self._thread is not None:
             self._thread.join(timeout)
@@ -137,11 +164,15 @@ class CaptureService:
         session = CaptureSession(
             self._interface, self._manager.module, self._manager.backend(device.backend), device,
         )
-        if self._closing.is_set():
+        if not self.wants_capture:
             session.close()
             return
         self._session = session
         session.start()
+        if not self.wants_capture:
+            self._stop_session()
+            return
+        self._retry_count = 0
         with self._buffer_lock:
             self._buffer = ring
         self._dropped = self._overflows = 0
@@ -170,7 +201,20 @@ class CaptureService:
             self._recorder = None
             self._publish(RecordingEvent(state, token, message=message))
 
-    def _handle(self, command: str, device: AudioDevice | RecordingRequest | None) -> None:
+    def _handle(self, command: str, device: AudioDevice | RecordingRequest | CapturePolicy | None) -> None:
+        if command == "configure" and isinstance(device, CapturePolicy):
+            if self._session is not None or self._target is not None:
+                raise AudioError("Stop before configuring audio")
+            self._buffer_duration = device.buffer_duration
+            self._retry_seconds = device.retry_seconds
+            self._auto_reconnect = device.auto_reconnect
+            with self._buffer_lock:
+                self._buffer = None
+            return
+        if command == "retry":
+            if self._target is not None and self._session is None and self.wants_capture:
+                self._reconnect()
+            return
         if command == "record" and isinstance(device, RecordingRequest):
             try:
                 if self._session is None or not self._session.is_active():
@@ -183,7 +227,9 @@ class CaptureService:
                 self._record_next_progress = 0
                 self._publish(RecordingEvent("RECORDING", device.token, message="録音中です。Oracle の音を収録してください。"))
             except (AudioError, OSError, ValueError, RuntimeError, MemoryError) as error:
-                self._publish(RecordingEvent("ERROR", device.token, message=f"録音を開始できません：{error}"))
+                logger.exception("Recording could not start")
+                message = str(error) if isinstance(error, AudioError) else "録音を開始できません。音声入力を確認して再試行してください。"
+                self._publish(RecordingEvent("ERROR", device.token, message=message))
             return
         elif command == "cancel_record":
             self._cancel_recording("録音を中止しました。")
@@ -202,7 +248,9 @@ class CaptureService:
             self._publish(CaptureStatus("DISCOVERING", "音声デバイスを確認しています。"))
             self._catalog()
             self._publish(CaptureStatus("STOPPED"))
-        elif command == "start" and device is not None:
+        elif command == "start" and isinstance(device, AudioDevice):
+            if not self.wants_capture:
+                return
             if self._session is not None and self._session.device == device:
                 return
             self._target = None
@@ -220,7 +268,8 @@ class CaptureService:
         logger.warning("Audio device lost: %s", reason)
         self._publish(silent)
         self._publish(CaptureStatus(
-            "DEVICE_LOST", "Audio device lost：音声入力が停止しました。再接続を試みます。",
+            "DEVICE_LOST", ("音声の接続が切れました。自動再接続を待つか「今すぐ再接続」を押してください。"
+                            if self._auto_reconnect else "音声の接続が切れました。「今すぐ再接続」で再試行してください。"),
         ))
 
     def _consume(self) -> None:
@@ -276,9 +325,10 @@ class CaptureService:
 
     def _reconnect(self) -> None:
         target = self._target
-        if target is None:
+        if target is None or not self.wants_capture:
             return
-        self._publish(CaptureStatus("RECONNECTING", "同じ音声デバイスへ再接続しています。"))
+        self._retry_count += 1
+        self._publish(CaptureStatus("RECONNECTING", f"再接続を試みています（{self._retry_count}回目）。", detail=self._target.device_name))
         try:
             catalog = self._catalog()
             if not self._closing.is_set():
@@ -287,7 +337,10 @@ class CaptureService:
             self._stop_session()
             self._close_interface()
             self._next_retry = time.monotonic() + self._retry_seconds
-            self._publish(CaptureStatus("DEVICE_LOST", f"再接続待機中：{error}"))
+            logger.warning("Reconnect attempt %s failed: %s", self._retry_count, error)
+            message = (f"再接続できませんでした。{self._retry_seconds:g}秒後に再試行します。Stopで中止できます。"
+                       if self._auto_reconnect else "再接続できませんでした。接続を確認して「今すぐ再接続」を押してください。")
+            self._publish(CaptureStatus("RECONNECTING", message, detail=str(error)))
 
     @staticmethod
     def _command_error_message(error: Exception) -> str:
@@ -296,7 +349,7 @@ class CaptureService:
                 "この音声デバイスを開始できません。Windows / VoiceMeeter の出力先と"
                 "音声設定を確認し、再検索または別のデバイスで再試行してください。"
             )
-        return f"音声入力エラー：{error}"
+        return "音声入力を開始できません。接続とWindowsの音声設定を確認し、再検索または別のデバイスで再試行してください。"
 
     def _run(self) -> None:
         terminal_message = ""
@@ -310,23 +363,26 @@ class CaptureService:
                     try:
                         self._handle(command, device)
                     except (AudioError, OSError, ValueError, RuntimeError, MemoryError) as error:
+                        self._wanted.clear()
                         self._target = None
                         self._stop_session()
                         self._close_interface()
                         logger.exception("Audio command failed")
-                        self._publish(CaptureStatus("ERROR", self._command_error_message(error)))
+                        self._publish(CaptureStatus("ERROR", self._command_error_message(error), detail=str(error)))
                 if self._session is not None:
                     try:
                         self._consume()
                     except (AudioError, OSError, ValueError, RuntimeError) as error:
                         self._lost(str(error))
-                elif self._target is not None and time.monotonic() >= self._next_retry:
+                elif self._auto_reconnect and self.wants_capture and self._target is not None and time.monotonic() >= self._next_retry:
                     self._reconnect()
         except Exception:
             # A thread boundary must release its resources even for programming errors.
             logger.exception("Unexpected audio worker failure")
             terminal_message = "音声ワーカーでエラーが発生しました。アプリを再起動してください。"
         finally:
+            self._wanted.clear()
+            self._closing.set()
             self._stop_session()
             self._close_interface()
             self._publish(CaptureStatus("CLOSED", terminal_message))

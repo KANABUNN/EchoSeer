@@ -46,6 +46,18 @@ class OverlaySettingsDialog(QDialog):
         form.addRow("基準高さ", self.height_spin)
         form.addRow("文字サイズ", self.font_spin)
         layout.addLayout(form)
+        row = QHBoxLayout()
+        self.preset_buttons = {}
+        for label, values in (
+            ("小", {"width": 500, "height": 112, "font_size": 22, "scale": 1.0}),
+            ("標準", {"width": 660, "height": 130, "font_size": 28, "scale": 1.0}),
+            ("大", {"width": 900, "height": 165, "font_size": 36, "scale": 1.0}),
+        ):
+            button = QPushButton(label)
+            button.clicked.connect(lambda checked=False, values=values: self.settings_changed.emit(values))
+            self.preset_buttons[label] = button
+            row.addWidget(button)
+        layout.addLayout(row)
         note = QLabel("位置調整が終わったらチェックを外してください。位置・表示設定は保存します。画面外の位置は起動時に補正します。")
         note.setWordWrap(True)
         layout.addWidget(note)

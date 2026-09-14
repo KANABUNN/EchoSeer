@@ -548,3 +548,34 @@ Windows 100% / 150%で14音Timeline・全7内訳・Listen / Stop・手動ラベ�
 
 最終の表表示・手動正解入力修正後はGUI / 起動19件も成功（15.17秒）。
 空欄・区切り記号だけの入力を保存しないことと、Windows 100%の表見出し・全7Oracleの評価表示を再確認した。
+
+
+## Phase 16 — Settings / Hotkey / UX（2026-09-14）
+
+指示書のPhase 16のみを実装。ユーザー指定により、Phase 17・18は実戦調整・改善測定後に実施する。
+
+- Settingsの下書き・変更取り消し・初期値・停止中の保存適用。変更項目だけを最新設定へ反映し、保存失敗では既存の設定とHotkeyを維持する。
+- 認識・前処理・FSM・記録条件をLive / Replay / Calibrationへ反映。保存した元テンプレートを変更しない。
+- Windows RegisterHotKey / WM_HOTKEY / MOD_NOREPEAT。初期OFF、4操作、単一キー割り当て、競合時の復元、編集時の解除、終了時の全解除。追加threadなし。
+- 現在Roundのやり直し、Round 1 Reset、前のRound、自動移行ON/OFF、Overlayの小・標準・大サイズ。入力形式・7種類の登録状況をLiveに表示。
+- 同じデバイスの自動/手動再接続、待機間隔、Stop中の開始完了・再試行の抑制。入力ドライバーと保存エラーの詳細は開発ログに分離。
+- schema_version 1の旧設定を初期値補完で読み込む。既存の表示名・配置・デバイスと変更していない精密な数値を保持する。
+- evaluation / reviewの既存パッケージを宣言へ追加。配布版のビルドはこのPhaseで行わない。
+
+追加39件：Hotkeyの入力・予約キー・重複・復元、Round確定保持、設定保存/検証失敗、
+編集の解除とstale message、内部レート変更とテンプレート維持、manual reconnectとpending open中のStop。
+
+検証：全712 passed（251.20秒）、pip check成功。終了エラーの表示クリア・終了後の要求拒否と内部96 kHzの実比較を追加確認し、最終差分の18 passed（5.56秒、新規1件を含む）。全体検証はこの最終差分の直前に実施。
+Windows専用ウィンドウの実キー入力で4操作、重複抑制、競合の復元、QKeySequenceEdit中の登録解除を確認。
+提供7録音を隔離バンクへ登録し、Replay14音を採用。元サンプルとバンクchecksumを維持。
+4worker終了、Global Hotkey登録0。最終100%表示では編集欄を空にしてから実キー入力し、組み合わせの新規取得も確認した。
+150%表示ではSettingsの通常/詳細表示、実登録競合の復元、Replay14音と全登録解除を確認。
+150%での実キー入力は、SetForegroundWindowで専用ウィンドウへ切り替えられずガードで停止（2回）。未実施扱いとし、入力は送信していない。
+100%の操作結果と150%の表示結果を分ける。確認結果は .runtime/phase16-native/dpi-1-final と dpi-1.5 に保存。
+
+実戦データは使用後にユーザーから受領する。独立した実戦録音での認識率・調整の改善測定と
+Destiny 2実行中の操作は未確認。Phase 17・18は保留。
+
+参照： [Windows RegisterHotKey](https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-registerhotkey) /
+[Qt Native Event Filter](https://doc.qt.io/qtforpython-6/PySide6/QtCore/QAbstractNativeEventFilter.html)。
+PySide6の2要素の戻り値は公式6.11実装のreturn-native-eventfilter-conversionでも確認した。

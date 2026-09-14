@@ -6,7 +6,7 @@ from queue import Empty, Queue
 from threading import Event, Thread
 
 from PySide6.QtCore import QObject, Qt, Signal, Slot
-from audio.data import AudioClip
+from audio.data import AudioClip, AudioDataError
 from audio.operations import OperationCancelled, check_cancel
 from audio.playback import AudioPlayer
 from encounter.vog_oracles import OracleId
@@ -14,6 +14,15 @@ from templates.manager import DeletedSample, TemplateCatalog, TemplateManager
 from templates.quality import QualityReport
 
 logger = logging.getLogger("oracle_assistant.templates")
+
+
+def user_error(error):
+    if isinstance(error, AudioDataError):
+        return str(error)
+    if isinstance(error, OSError):
+        return "ファイルの読み込み・保存に失敗しました。保存先・アクセス権・空き容量を確認してください。"
+    return "処理に失敗しました。入力を確認して再試行してください。詳細は診断ログで確認できます。"
+
 
 
 @dataclass(frozen=True, slots=True)
@@ -101,7 +110,7 @@ class TemplateController(QObject):
                     raise
                 except Exception as error:
                     logger.exception("Template import failed: %s", path)
-                    errors.append(f"{path.name}：{error}")
+                    errors.append(f"{path.name}：{user_error(error)}")
             selected = successes[-1].metadata.sample_id if successes else ""
             message = f"{len(successes)} 件を登録しました。"
             if errors:
@@ -140,5 +149,5 @@ class TemplateController(QObject):
                 result = TemplateResult(task.kind, message="処理を中止しました。")
             except Exception as error:
                 logger.exception("Template operation failed")
-                result = TemplateResult(task.kind, message=f"処理に失敗しました：{error}")
+                result = TemplateResult(task.kind, message=user_error(error))
             self.finished.emit(result)

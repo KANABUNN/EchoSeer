@@ -4,7 +4,9 @@
     "backend": "wasapi_loopback",
     "device": null,
     "internal_sample_rate": 48000,
-    "buffer_duration": 10.0
+    "buffer_duration": 10.0,
+    "auto_reconnect": true,
+    "reconnect_interval": 2.0
   },
   "recognition": {
     "waveform_weight": 0.6,
@@ -23,6 +25,7 @@
     "top_n": 3
   },
   "sequence": {
+    "auto_advance": true,
     "lockout_duration": 10.0,
     "silence_duration": 3.0,
     "pass_gap": 2.0,
@@ -47,9 +50,16 @@
   "logging": {
     "event_logs": true,
     "uncertain_audio": true,
+    "success_audio": false,
     "full_recording": false,
-    "debug": false,
-    "success_audio": false
+    "debug": false
+  },
+  "hotkeys": {
+    "enabled": false,
+    "toggle_capture": "Ctrl+Alt+F7",
+    "reset": "Ctrl+Alt+F8",
+    "next_round": "Ctrl+Alt+F9",
+    "toggle_overlay": "Ctrl+Alt+F10"
   },
   "oracle_labels": {
     "L1": "左1",

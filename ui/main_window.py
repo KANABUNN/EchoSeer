@@ -26,6 +26,10 @@ from config.schema import AppConfig, ConfigValidationError
 from ui.audio_controller import AudioController
 from ui.live_page import LivePage
 from ui.live_controller import LiveController
+from ui.settings_page import SettingsPage
+from ui.hotkey_controller import HotkeyController
+from config.hotkeys import HotkeyRegistrationError
+from replay.analyzer import Analyzer
 from ui.overlay import OverlayWindow
 from ui.overlay_settings import OverlaySettingsDialog
 from ui.oracle_map import copy_positions
@@ -50,6 +54,7 @@ class MainWindow(QMainWindow):
         operations: OperationController | None = None,
         templates: TemplateController | None = None,
         recognizer: LiveController | None = None,
+        hotkey_backend=None,
     ) -> None:
         super().__init__()
         self.data_root = data_root
@@ -106,6 +111,13 @@ class MainWindow(QMainWindow):
         self.review_scroll.setWidgetResizable(True)
         self.review_scroll.setWidget(self.review_page)
         self.tabs.addTab(self.review_scroll,"記録")
+        self.settings_page = SettingsPage(self.settings)
+        self.settings_scroll = QScrollArea()
+        self.settings_scroll.setWidgetResizable(True)
+        self.settings_scroll.setWidget(self.settings_page)
+        self.tabs.addTab(self.settings_scroll, "Settings")
+        self.settings_page.apply_requested.connect(self._apply_settings)
+        self.settings_page.overlay_requested.connect(self._show_overlay_settings)
         layout.addWidget(self.tabs, stretch=1)
         self.setCentralWidget(central)
         exit_action = QAction("終了", self)
@@ -122,10 +134,15 @@ class MainWindow(QMainWindow):
         self.live_page.start_requested.connect(self._start_capture)
         self.live_page.stop_requested.connect(self._stop_capture)
         self.live_page.refresh_requested.connect(self._refresh_devices)
+        self.live_page.retry_requested.connect(self.controller.service.retry)
+        self.controller.service.configure(
+            self.settings.audio.buffer_duration, self.settings.audio.reconnect_interval,
+            self.settings.audio.auto_reconnect,
+        )
         self.operations = operations or OperationController(
             self.settings.audio.internal_sample_rate, parent=self,
             confidence=ConfidenceEngine(self.settings.recognition),
-            recorder=RecognitionRecorder(data_root / "logs", self.settings.logging, conditions={"sample_rate":self.settings.audio.internal_sample_rate,"recognition":asdict(self.settings.recognition)}),
+            recorder=RecognitionRecorder(data_root / "logs", self.settings.logging, conditions={"sample_rate":self.settings.audio.internal_sample_rate,"recognition":asdict(self.settings.recognition),"sequence":asdict(self.settings.sequence)}),
             sequence_settings=self.settings.sequence,
         )
         self.operations.finished.connect(self._on_operation, Qt.ConnectionType.QueuedConnection)
@@ -170,10 +187,12 @@ class MainWindow(QMainWindow):
             )
         self.recognizer = recognizer or LiveController(
             self._make_live_classifier, self.settings.recognition, self.settings.sequence,
-            RecognitionRecorder(data_root / "logs", self.settings.logging, conditions={"sample_rate":self.settings.audio.internal_sample_rate,"recognition":asdict(self.settings.recognition)}), parent=self,
+            RecognitionRecorder(data_root / "logs", self.settings.logging, conditions={"sample_rate":self.settings.audio.internal_sample_rate,"recognition":asdict(self.settings.recognition),"sequence":asdict(self.settings.sequence)}), parent=self,
         )
         self.recognizer.updated.connect(self._on_live_update, Qt.ConnectionType.QueuedConnection)
         self.live_page.dashboard.round_requested.connect(self._select_live_round)
+        self.live_page.dashboard.auto_checkbox.setChecked(self.settings.sequence.auto_advance)
+        self.live_page.dashboard.auto_advance_requested.connect(self._save_auto_advance)
         self._capture_live = False
         self._last_audio_loss = (0, 0)
         self.overlay = OverlayWindow(self.settings.overlay, self.settings.oracle_labels,
@@ -220,12 +239,27 @@ class MainWindow(QMainWindow):
         self._close_timer.setInterval(50)
         self._close_timer.timeout.connect(self.close)
         self.live_page.set_status(CaptureStatus("DISCOVERING", "音声デバイスを確認しています。"))
+        self.hotkeys = HotkeyController(self.settings.hotkeys, parent=self, backend=hotkey_backend)
+        self.hotkeys.activated.connect(self._on_hotkey)
+        self._hotkey_warning = ""
+        self.hotkeys.status_changed.connect(self._on_hotkey_status)
+        self.settings_page.hotkey_status.setText(self.hotkeys.status)
+        if self.settings.hotkeys.enabled and "有効" not in self.hotkeys.status:
+            self.warning_label.setText(self.hotkeys.status)
+            self.warning_label.show()
+        self._settings_timer = QTimer(self)
+        self._settings_timer.setInterval(100)
+        self._settings_timer.timeout.connect(lambda: self.settings_page.set_idle(self._settings_idle()))
+        self._settings_timer.start()
         self.controller.start_worker()
 
     def _make_live_classifier(self):
-        recognition = self.settings.recognition
+        return self._classifier_for(self.settings)
+
+    def _classifier_for(self, settings):
+        recognition = settings.recognition
         return OracleClassifier(
-            self.templates.manager, self.settings.audio.internal_sample_rate,
+            self.templates.manager, settings.audio.internal_sample_rate,
             recognition.template_aggregation, recognition.top_n,
             BandpassSettings(recognition.bandpass_low_hz, recognition.bandpass_high_hz)
             if recognition.bandpass_enabled else None,
@@ -303,12 +337,156 @@ class MainWindow(QMainWindow):
     def _save_config(self) -> bool:
         try:
             self.config_manager.save(self.settings)
+            self.settings_page.sync_current(self.settings)
             return True
         except (OSError, ConfigValidationError):
             logger.exception("Could not save audio selection")
             self.warning_label.setText("設定を保存できません。保存先を確認してください。")
             self.warning_label.show()
             return False
+
+    def _settings_idle(self):
+        return (
+            not self._closing and self.live_page._state in {"STOPPED", "ERROR"}
+            and not self.controller.service.wants_capture
+            and not self.operations.busy and not self.templates.busy
+            and self._record_target is None
+        )
+
+    @Slot()
+    def _apply_settings(self):
+        try:
+            candidate = self.settings_page.proposal(self.settings)
+        except ConfigValidationError as error:
+            logger.exception("Invalid settings draft")
+            message = str(error)
+            if not any(ord(char) > 127 for char in message):
+                message = {
+                    "recognition weights must sum to 1": "波形とスペクトルの重みの合計を1にしてください。",
+                    "recognition score thresholds must be ordered": "スコアは「低スコアの境界 ≤ 採用スコア ≤ 高信頼スコア」にしてください。",
+                    "recognition margin thresholds must be ordered": "採用に必要な候補差は高信頼に必要な候補差以下にしてください。",
+                    "bandpass range must be below Nyquist": "帯域は下限 < 上限 < 内部サンプルレートの半分にしてください。",
+                }.get(message, "設定値の範囲と組み合わせを確認してください。")
+            self.settings_page.show_message(message)
+            return False
+        return self._apply_settings_config(candidate)
+
+    def _apply_settings_config(self, candidate, keep_draft=False):
+        if not self._settings_idle():
+            self.settings_page.show_message("Stopして、Replay・Calibrationの処理が終わるまで待ってください。")
+            return False
+        previous = self.settings
+        changed = sorted(self.settings_page.changed) if not keep_draft else ["sequence.auto_advance"]
+        try:
+            candidate.validate()
+            analyzer = Analyzer(candidate.audio.internal_sample_rate)
+            confidence = ConfidenceEngine(candidate.recognition)
+            classifier = self._classifier_for(candidate)
+            self.hotkeys.configure(candidate.hotkeys)
+        except (ConfigValidationError, HotkeyRegistrationError, ValueError) as error:
+            logger.exception("Settings preflight failed")
+            self.settings_page.show_message(str(error) if isinstance(error, HotkeyRegistrationError) else "設定値を確認してください。")
+            if isinstance(error, HotkeyRegistrationError):
+                self.hotkeys._status(str(error))
+            return False
+        try:
+            self.config_manager.save(candidate)
+        except (OSError, ConfigValidationError):
+            logger.exception("Settings save failed; keeping previous runtime settings")
+            try:
+                self.hotkeys.configure(previous.hotkeys)
+            except HotkeyRegistrationError as error:
+                logger.exception("Hotkey rollback failed")
+                self.settings_page.hotkey_status.setText(str(error))
+                self.warning_label.setText(str(error))
+                self.warning_label.show()
+            self.settings_page.show_message("設定を保存できません。元の設定を維持しています。保存先を確認してください。")
+            return False
+        self.settings = candidate
+        self.live_page.settings = candidate.audio
+        self.operations.analyzer = analyzer
+        self.operations.classifier = classifier
+        self.operations.confidence = confidence
+        self.operations.sequence_settings = replace(candidate.sequence)
+        self.templates.manager.analyzer = Analyzer(candidate.audio.internal_sample_rate)
+        conditions = {
+            "sample_rate": candidate.audio.internal_sample_rate,
+            "recognition": asdict(candidate.recognition), "sequence": asdict(candidate.sequence),
+        }
+        if self.operations.recorder:
+            self.operations.recorder.conditions = conditions
+            self.operations.recorder.settings = replace(candidate.logging)
+            self.operations.recorder.events.enabled = candidate.logging.event_logs
+        self.recognizer.configure(candidate.recognition, candidate.sequence, candidate.logging, conditions)
+        self.controller.service.configure(candidate.audio.buffer_duration,
+                                          candidate.audio.reconnect_interval,
+                                          candidate.audio.auto_reconnect)
+        self.live_page.set_buffer_available(False)
+        self._clear_live_view(self.live_page.dashboard.round_index)
+        self.replay_page._clear_result()
+        self.replay_page._update_controls()
+        self.replay_page.show_error("設定を変更しました。音声を再解析してください。")
+        self.evaluation_page.begin()
+        view = self.replay_page.recognition
+        for checkbox, value in (
+            (view.event_logs_checkbox, candidate.logging.event_logs),
+            (view.uncertain_audio_checkbox, candidate.logging.uncertain_audio),
+            (view.success_audio_checkbox, candidate.logging.success_audio),
+            (self.review_page.success_checkbox, candidate.logging.success_audio),
+            (self.live_page.dashboard.auto_checkbox, candidate.sequence.auto_advance),
+        ):
+            checkbox.blockSignals(True)
+            checkbox.setChecked(value)
+            checkbox.blockSignals(False)
+        if keep_draft:
+            self.settings_page.sync_current(candidate)
+        else:
+            self.settings_page.load(candidate)
+        self.settings_page.show_message("設定を保存して適用しました。Startで使用できます。")
+        self.statusBar().showMessage("設定を保存して適用しました。", 5000)
+        logger.info("Settings applied: %s", changed)
+        return True
+
+    @Slot(bool)
+    def _save_auto_advance(self, enabled):
+        candidate = AppConfig.from_dict(self.settings.to_dict())
+        candidate.sequence.auto_advance = enabled
+        if not self._apply_settings_config(candidate, keep_draft=True):
+            checkbox = self.live_page.dashboard.auto_checkbox
+            checkbox.blockSignals(True)
+            checkbox.setChecked(self.settings.sequence.auto_advance)
+            checkbox.blockSignals(False)
+
+    @Slot(str)
+    def _on_hotkey_status(self, text):
+        self.settings_page.hotkey_status.setText(text)
+        if "できません" in text or "失敗" in text:
+            self._hotkey_warning = text
+            self.warning_label.setText(text)
+            self.warning_label.show()
+        elif self._hotkey_warning and self.warning_label.text() == self._hotkey_warning:
+            self.warning_label.clear()
+            self.warning_label.hide()
+            self._hotkey_warning = ""
+
+    @Slot(str)
+    def _on_hotkey(self, action):
+        if self._closing:
+            return
+        dashboard = self.live_page.dashboard
+        if action == "toggle_capture":
+            if self.live_page.stop_button.isEnabled():
+                self.live_page.stop_button.click()
+            elif self.live_page.start_button.isEnabled():
+                self.live_page.start_button.click()
+            else:
+                self.statusBar().showMessage("音声デバイスを選択して、準備が終わるまで待ってください。", 5000)
+        elif action == "reset":
+            dashboard.reset_button.click()
+        elif action == "next_round":
+            dashboard.next_button.click()
+        elif action == "toggle_overlay":
+            dashboard.overlay_button.click()
 
     @Slot(bool)
     def _save_success_audio(self,enabled):
@@ -376,6 +554,8 @@ class MainWindow(QMainWindow):
         if isinstance(event, DeviceCatalog):
             self.live_page.set_catalog(event)
         elif isinstance(event, CaptureStatus):
+            if event.state in {"LIVE", "STARTING", "DEVICE_LOST", "RECONNECTING"} and not self.controller.service.wants_capture:
+                return
             was_live = self._capture_live
             self._capture_live = event.state == "LIVE"
             if event.state == "LIVE" and not was_live:
@@ -387,7 +567,7 @@ class MainWindow(QMainWindow):
             elif was_live and event.state in ("DEVICE_LOST", "RECONNECTING"):
                 self.recognizer.invalidate("DEVICE_LOST")
                 self._clear_live_view(self.live_page.dashboard.round_index, "音声の接続が切れました。")
-            elif event.state in ("STOPPED", "ERROR"):
+            elif event.state in ("STOPPED", "ERROR", "CLOSED"):
                 self.recognizer.stop()
                 self._clear_live_view(self.live_page.dashboard.round_index)
             self.live_page.set_status(event)
@@ -736,6 +916,13 @@ class MainWindow(QMainWindow):
             return
         if event.catalog is not None:
             self.calibration_page.set_catalog(event.catalog, event.selected_id)
+            available = {OracleId(sample.metadata.oracle) for sample in event.catalog.samples}
+            missing = [oracle.value for oracle in OracleId if oracle not in available]
+            text = f"Oracleサンプル {len(available)}/7種類"
+            text += (" · 未登録：" + " / ".join(missing) + "（Calibrationで登録）") if missing else " · 使用できます"
+            if event.catalog.issues:
+                text += " · 保存データの警告があります（Calibrationで確認）"
+            self.live_page.readiness_label.setText(text)
         if event.quality is not None:
             self.calibration_page.set_quality(event.quality)
         elif event.kind == "quality":
@@ -750,6 +937,8 @@ class MainWindow(QMainWindow):
 
     def closeEvent(self, event: QCloseEvent) -> None:
         self._closing = True
+        self._settings_timer.stop()
+        self.hotkeys.close()
         self.overlay.hide()
         self.overlay_dialog.hide()
         audio_closed = self.controller.shutdown(timeout=0)

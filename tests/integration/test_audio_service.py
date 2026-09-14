@@ -63,7 +63,9 @@ def test_open_failure_is_visible_and_can_be_retried() -> None:
         factory.fail_open = True
         service.start(catalog.default_for("wasapi_loopback"))
         error = wait_event(events, lambda event: isinstance(event, CaptureStatus) and event.state == "ERROR")
-        assert "Device unavailable" in error.message
+        assert "再検索" in error.message
+        assert "Device unavailable" not in error.message
+        assert "Device unavailable" in error.detail
         factory.fail_open = False
         service.start(catalog.default_for("input_device"))
         live = wait_event(events, lambda event: isinstance(event, CaptureStatus) and event.state == "LIVE")
@@ -128,6 +130,9 @@ def test_unexpected_worker_failure_remains_visible_after_cleanup() -> None:
     service.start_worker()
     closed = wait_event(events, lambda event: isinstance(event, CaptureStatus) and event.state == "CLOSED")
     assert "再起動" in closed.message
+    assert not service.wants_capture
+    with pytest.raises(RuntimeError):
+        service.refresh()
     assert service.shutdown()
     assert all(interface.terminated for interface in factory.interfaces)
 

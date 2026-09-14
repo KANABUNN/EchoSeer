@@ -42,6 +42,7 @@ class LiveController(QObject):
         self.sequence = replace(sequence or SequenceSettings())
         self.recorder = recorder
         self._logging = replace(recorder.settings if recorder else LoggingSettings())
+        self._conditions = recorder.conditions if recorder else None
         self._state = LiveControl(0, None, 1, "", "", Event())
         self._lock, self._wake, self._closing = Lock(), Event(), Event()
         self._thread = None
@@ -98,6 +99,16 @@ class LiveController(QObject):
         with self._lock:
             self._logging = replace(settings)
 
+    def configure(self, recognition, sequence, logging_settings, conditions):
+        with self._lock:
+            if self._state.ring is not None:
+                raise RuntimeError("Stop before configuring recognition")
+            self.recognition = replace(recognition)
+            self.sequence = replace(sequence)
+            self._logging = replace(logging_settings)
+            self._conditions = conditions
+        self.stop()
+
     def shutdown(self, timeout=0):
         self._closing.set()
         with self._lock:
@@ -127,6 +138,8 @@ class LiveController(QObject):
         while not self._closing.is_set():
             with self._lock:
                 state, logging_settings = self._state, replace(self._logging)
+                recognition, sequence = replace(self.recognition), replace(self.sequence)
+                conditions = self._conditions
             try:
                 if generation != state.generation:
                     generation = state.generation
@@ -134,17 +147,17 @@ class LiveController(QObject):
                         if session is not None:
                             result = session.invalidate(state.fault, state.cancel)
                         else:
-                            engine = SequenceEngine(self.sequence)
+                            engine = SequenceEngine(sequence)
                             engine.arm(0, state.round_index)
                             engine.invalidate(0, state.fault)
-                            result = LiveResult(engine.verify(self.recognition, state.cancel))
+                            result = LiveResult(engine.verify(recognition, state.cancel))
                         self._emit(state, result)
                     elif state.ring is not None and not state.paused:
                         _, stream_id, stamp, _, cursor = state.ring.snapshot_event(0)
                         origin = (stamp or time.monotonic()) - cursor / state.ring.sample_rate
                         session = LiveSequenceSession(self.classifier_factory(), state.ring.sample_rate,
                             state.ring.channels, stream_id, cursor, origin, state.round_index,
-                            self.recognition, self.sequence, self.recorder)
+                            recognition, sequence, self.recorder)
                         self._emit(state, LiveResult(session.engine.snapshot()))
                     else:
                         session = None
@@ -152,6 +165,7 @@ class LiveController(QObject):
                 if session is not None and state.ring is not None and not state.paused and not state.fault:
                     if self.recorder:
                         self.recorder.settings = logging_settings
+                        self.recorder.conditions = conditions
                         self.recorder.events.enabled = logging_settings.event_logs
                     limit = min(round(state.ring.sample_rate * .5),
                                 MAX_EVENT_BYTES // (4 * state.ring.channels))

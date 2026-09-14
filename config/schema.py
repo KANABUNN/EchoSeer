@@ -29,6 +29,8 @@ class AudioSettings:
     device: DeviceIdentity | None = None
     internal_sample_rate: int = 48000
     buffer_duration: float = 10.0
+    auto_reconnect: bool = True
+    reconnect_interval: float = 2.0
 
 
 @dataclass(slots=True)
@@ -51,6 +53,7 @@ class RecognitionSettings:
 
 @dataclass(slots=True)
 class SequenceSettings:
+    auto_advance: bool = True
     lockout_duration: float = 10.0
     silence_duration: float = 3.0
     pass_gap: float = 2.0
@@ -82,6 +85,15 @@ class LoggingSettings:
     success_audio: bool = False
     full_recording: bool = False
     debug: bool = False
+
+
+@dataclass(slots=True)
+class HotkeySettings:
+    enabled: bool = False
+    toggle_capture: str = "Ctrl+Alt+F7"
+    reset: str = "Ctrl+Alt+F8"
+    next_round: str = "Ctrl+Alt+F9"
+    toggle_overlay: str = "Ctrl+Alt+F10"
 
 
 @dataclass(slots=True)
@@ -155,6 +167,7 @@ class AppConfig:
     sequence: SequenceSettings = field(default_factory=SequenceSettings)
     overlay: OverlaySettings = field(default_factory=OverlaySettings)
     logging: LoggingSettings = field(default_factory=LoggingSettings)
+    hotkeys: HotkeySettings = field(default_factory=HotkeySettings)
     oracle_labels: dict[str, str] = field(
         default_factory=lambda: dict(DEFAULT_ORACLE_LABELS)
     )
@@ -192,6 +205,12 @@ class AppConfig:
             raise ConfigValidationError("audio.backend: unsupported backend")
         _range("audio.internal_sample_rate", self.audio.internal_sample_rate, 8000, 192000)
         _range("audio.buffer_duration", self.audio.buffer_duration, 5, 30)
+        _range("audio.reconnect_interval", self.audio.reconnect_interval, .25, 60)
+        from config.hotkeys import bindings
+        try:
+            bindings(self.hotkeys)
+        except ValueError as error:
+            raise ConfigValidationError(str(error)) from error
         device = self.audio.device
         if device is not None:
             if not device.host_api.strip() or not device.device_name.strip():

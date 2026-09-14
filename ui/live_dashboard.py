@@ -4,7 +4,7 @@ from dataclasses import replace
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import QColor
 from PySide6.QtWidgets import (
-    QAbstractItemView, QComboBox, QGroupBox, QHBoxLayout, QHeaderView, QLabel,
+    QAbstractItemView, QCheckBox, QComboBox, QGroupBox, QHBoxLayout, QHeaderView, QLabel,
     QPushButton, QTableWidget, QTableWidgetItem, QVBoxLayout,
 )
 
@@ -19,6 +19,7 @@ class LiveDashboard(QGroupBox):
     round_requested = Signal(int)
     overlay_requested = Signal(bool)
     overlay_settings_requested = Signal()
+    auto_advance_requested = Signal(bool)
 
     def __init__(self, labels=None, positions=None):
         super().__init__("Live Oracle")
@@ -33,11 +34,24 @@ class LiveDashboard(QGroupBox):
         for index, count in enumerate(VOG_ORACLES.sequence_lengths, 1):
             self.round_combo.addItem(f"Round {index} · {count}個", index)
         self.next_button, self.reset_button = QPushButton("Next Round"), QPushButton("Reset")
+        self.reset_button.setText("Reset（Round 1）")
+        self.retry_button = QPushButton("このRoundをやり直す")
+        self.previous_button = QPushButton("前のRound")
+        self.retry_button.setToolTip("現在のRoundの判定と保存候補を消して、提示を待ち直します。")
+        self.reset_button.setToolTip("Round 1からやり直します。")
         self.overlay_button = QPushButton("Overlay")
         self.overlay_button.setCheckable(True)
         self.overlay_settings_button = QPushButton("Overlay設定")
-        for widget in (self.round_combo, self.next_button, self.reset_button):
+        for widget in (self.round_combo, self.previous_button, self.next_button):
             row.addWidget(widget)
+        self.auto_checkbox = QCheckBox("自動で次のRoundへ")
+        self.auto_checkbox.setToolTip("確定後の待機時間と無音を確認して進みます。Stop後に変更できます。")
+        row.addWidget(self.auto_checkbox)
+        row.addStretch()
+        layout.addLayout(row)
+        row = QHBoxLayout()
+        row.addWidget(self.retry_button)
+        row.addWidget(self.reset_button)
         row.addStretch()
         row.addWidget(self.overlay_button)
         row.addWidget(self.overlay_settings_button)
@@ -83,6 +97,9 @@ class LiveDashboard(QGroupBox):
         self.round_combo.currentIndexChanged.connect(lambda: self.round_requested.emit(self.round_index))
         self.next_button.clicked.connect(self._next)
         self.reset_button.clicked.connect(lambda: self.round_requested.emit(1))
+        self.retry_button.clicked.connect(lambda: self.round_requested.emit(self.round_index))
+        self.previous_button.clicked.connect(lambda: self.round_requested.emit(max(1, self.round_index - 1)))
+        self.auto_checkbox.toggled.connect(self.auto_advance_requested)
         self.overlay_button.toggled.connect(self.overlay_requested)
         self.overlay_settings_button.clicked.connect(self.overlay_settings_requested)
         self.clear()
@@ -113,6 +130,7 @@ class LiveDashboard(QGroupBox):
         self.round_combo.setCurrentIndex(snapshot.round_index - 1)
         self.round_combo.blockSignals(False)
         self.next_button.setEnabled(snapshot.round_index < 5)
+        self.previous_button.setEnabled(snapshot.round_index > 1)
         self.state_label.setText(view.state_text)
         self.state_label.setStyleSheet(f"color: {view.color}; font-weight: 600;")
         self.confidence_label.setText(view.confidence_text)

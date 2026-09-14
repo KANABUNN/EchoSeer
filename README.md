@@ -3,7 +3,7 @@
 Vault of Glass のゲーム音声からオラクルを識別し、順序と信頼度を表示する
 Windows アプリケーションを、指示書の Phase 順に開発しています。
 
-**Phase 15の記録・再評価機能まで実装済みです。実戦データに基づく調整は未実施です。**
+**Phase 16まで実装済みです。実戦データに基づく調整・改善測定後にPhase 17・18を進めます。**
 WASAPI Loopback / 通常録音入力の選択、Start / Stop、リアルタイム音量表示、
 リングバッファ、WAV 読み書き、共通前処理、簡易 Replay、設定保存・復旧、診断ログが動作します。
 Calibration で Oracle ごとの複数サンプル登録・録音・Import・Listen・削除・復元ができます。
@@ -19,7 +19,9 @@ CalibrationのQuality Checkで保存した元音声を再確認し、7種類の�
 ReplayのTimelineで各音の時刻・理由とスコア内訳を確認し、Datasetの一括評価・比較・混同行列CSV保存ができます。
 Live / 保存ログから固定音声を開き、手動の正解・分類を付けて収集できます。採用音声の収集は初期OFFです。
 手順は [Replay / Debug](docs/replay-debug.md) / [Dataset評価](docs/dataset-evaluation.md) / [実戦記録](docs/gameplay-review.md)。
-後続PhaseはHotkey・UX、配布EXEです。
+Settingsで認識条件・記録・再接続・自動Round移行を保存して適用できます。
+Hotkeyは初期OFFで、Start / Stop・Reset・Next Round・Overlay切替を割り当てられます。
+使い方は[設定と操作](docs/settings-ux.md)。後続の配布EXE・最終テストは実戦調整後に進めます。
 
 ゲームへの操作送信、メモリ読み取り、DLL 注入、ゲームファイルへのアクセス、
 自動入力、Bungie API、クラウド認識、テレメトリーは実装しません。
@@ -60,7 +62,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\setup.ps1
 
 1. Live の入力方式で「再生デバイス（WASAPI Loopback）」を選びます。
 2. ゲームや確認音の出力先と同じデバイスを選びます。初回は Windows の既定再生先を選択します。
-3. デバイス欄にマウスを合わせてレートとチャンネル数を確認し、Start を押します。
+3. デバイス下のレートとチャンネル数、Oracleサンプルの登録状況を確認し、Start を押します。
 4. LIVE になり、音声に応じて RMS / Peak と音量メーターが変化することを確認します。
 5. Stop で停止します。停止後にデバイス変更・再検索ができます。
 
@@ -252,7 +254,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\verify.ps1
 .\.venv\Scripts\python.exe -m pip check
 ```
 
-Python 3.14.6 で **674 passed**、依存関係の確認も成功しています。
+Python 3.14.6 で **712 passed**（251.20秒）。最終修正は **18 passed**（新規1件を含む）、依存関係の確認も成功しています。
 自動テストは実デバイス・ゲーム・VoiceMeeter の起動を必要としません。
 うち20件は任意のローカル samples/A.wav〜G.wav を使い、音声がない環境では skip します。
 GUI は offscreen、音声は実スレッドで動くデバイス代替を用いて確認します。
@@ -279,6 +281,8 @@ Phase 8–9 は完全一致の確定、不一致位置の特定、1箇所のLOW�
 Phase 10–12は連続LiveとReplayの7ケース、Windowsで提供7音声のGUI登録・品質確認・Live確定／不一致を確認しました。
 Windowsのテスト用borderless画面でクリック透過・非アクティブ表示・位置調整、100% / 125% / 150%表示、全4worker解放を確認しました。
 Phase 13〜15は提供音声の15ケースで一括評価・設定比較、WindowsのTimeline・手動正解付け・ログReplay・Live固定コピーを確認しました。
+Phase 16は設定の保存・復元、Hotkey競合・編集時の解除、手動再接続・Stopによる中止を追加検証しました。
+Windowsの専用ウィンドウでHotkey受信・長押し抑制・非アクティブ表示、終了時の4workerと全登録の解放を確認しました。
 Destiny 2実行中のOverlay、物理的な複数モニター変更、長時間実戦の性能は未確認です。
 提供音声に分類誤りを注入した8ケースは、推定・同点・弱い根拠を確定表示にしません。
 別録音・会話や効果音を含む実戦の認識率、VoiceMeeter B1 へのゲーム音経路、物理的な切断・再接続は未検証です。

@@ -118,7 +118,8 @@ def test_open_error_is_displayed_and_retry_works(qt_app, tmp_path: Path) -> None
         factory.fail_open = True
         window.live_page.start_button.click()
         pump_until(lambda: window.live_page.state_label.text() == "ERROR")
-        assert "Device unavailable" in window.live_page.message_label.text()
+        assert "再検索" in window.live_page.message_label.text()
+        assert "Device unavailable" not in window.live_page.message_label.text()
         assert window.live_page.start_button.isEnabled()
         factory.fail_open = False
         window.live_page.start_button.click()

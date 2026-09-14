@@ -25,7 +25,7 @@ oracle-assistant = "app.application:main"
 where = ["."]
 include = [
     "app*", "audio*", "config*", "detector*", "dsp*",
-    "encounter*", "logging_ext*", "replay*", "templates*", "ui*",
+    "encounter*", "evaluation*", "logging_ext*", "review*", "replay*", "templates*", "ui*",
 ]
 exclude = ["tests*", "build*"]
 [tool.pytest.ini_options]
