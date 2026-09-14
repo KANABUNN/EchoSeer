@@ -1,0 +1,11 @@
+{
+  "schema_version": 1,
+  "template_seconds": 1.0,
+  "query_start_seconds": 1.0,
+  "query_end_seconds": 1.75,
+  "noise": "white",
+  "snr_db": [10, 0, -10, -20],
+  "seeds": [17, 37, 73],
+  "waveform_weight": 0.6,
+  "spectrum_weight": 0.4
+}

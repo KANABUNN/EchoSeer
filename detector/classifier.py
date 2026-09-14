@@ -1,6 +1,7 @@
-"""Basic waveform-only Oracle ranking, independent of Qt and sequence state."""
+"""Waveform and STFT Oracle ranking, independent of Qt and sequence state."""
 from dataclasses import dataclass
 import logging
+import math
 from threading import Event
 
 import numpy as np
@@ -10,6 +11,7 @@ from dsp.bandpass import BandpassSettings, bandpass_audio
 from dsp.correlation import CorrelationMatch, normalized_correlation
 from dsp.normalization import normalize_audio
 from dsp.preprocess import preprocess_clip
+from dsp.spectrum import spectral_template, spectral_similarity
 from encounter.vog_oracles import OracleId
 from templates.manager import TemplateManager
 
@@ -31,6 +33,12 @@ class TemplateWaveform:
 class SampleScore:
     sample_id: str
     match: CorrelationMatch
+    spectrum_score: float
+    combined_score: float
+
+    @property
+    def waveform_score(self) -> float:
+        return self.match.score
 
 
 @dataclass(frozen=True, slots=True)
@@ -38,6 +46,12 @@ class OracleScore:
     oracle: OracleId
     score: float
     samples: tuple[SampleScore, ...]
+    waveform_score: float
+    spectrum_score: float
+
+    @property
+    def combined_score(self) -> float:
+        return self.score
 
 
 @dataclass(frozen=True, slots=True)
@@ -47,6 +61,8 @@ class ClassificationResult:
     notices: tuple[str, ...] = ()
     aggregation: str = "best"
     top_n: int = 3
+    waveform_weight: float = 0.60
+    spectrum_weight: float = 0.40
 
     @property
     def best_candidate(self) -> OracleId | None:
@@ -86,7 +102,8 @@ class OracleClassifier:
     def __init__(self, manager: TemplateManager | None = None, sample_rate: int = 48000,
                  aggregation: str = "best", top_n: int = 3,
                  bandpass: BandpassSettings | None = None,
-                 templates: tuple[TemplateWaveform, ...] | None = None) -> None:
+                 templates: tuple[TemplateWaveform, ...] | None = None,
+                 waveform_weight: float = 0.60, spectrum_weight: float = 0.40) -> None:
         if type(sample_rate) is not int or not 8000 <= sample_rate <= 192000:
             raise ValueError("Invalid internal sample rate")
         if aggregation not in ("best", "top_n_mean") or type(top_n) is not int or not 1 <= top_n <= 20:
@@ -95,12 +112,21 @@ class OracleClassifier:
             raise ValueError("Choose a stored or in-memory template source")
         if bandpass is not None:
             bandpass.validate(sample_rate)
+        weights = (waveform_weight, spectrum_weight)
+        if any(type(w) not in (int, float) or not math.isfinite(w) or not 0 <= w <= 1 for w in weights):
+            raise ValueError("Invalid recognition weights")
+        total = sum(weights)
+        if not math.isclose(total, 1.0, rel_tol=0, abs_tol=1e-6):
+            raise ValueError("Recognition weights must sum to 1")
+        self.waveform_weight = float(waveform_weight / total)
+        self.spectrum_weight = float(spectrum_weight / total)
         self.manager, self.sample_rate = manager, sample_rate
         self.aggregation, self.top_n, self.bandpass = aggregation, top_n, bandpass
         self.templates = tuple(templates or ())
 
     def _result(self, status: str, ranking=(), notices=()) -> ClassificationResult:
-        return ClassificationResult(status, tuple(ranking), tuple(notices), self.aggregation, self.top_n)
+        return ClassificationResult(status, tuple(ranking), tuple(notices), self.aggregation, self.top_n,
+                                    self.waveform_weight, self.spectrum_weight)
 
     def _event_limit(self, clip: AudioClip) -> ClassificationResult | None:
         if clip.duration_seconds < MIN_EVENT_SECONDS:
@@ -157,8 +183,12 @@ class OracleClassifier:
                     raise AudioDataError("比較用サンプルが前処理後に無音です。")
                 bank_bytes += waveform.samples.nbytes
                 if bank_bytes > MAX_BANK_BYTES:
-                    return self._result("LIMIT", notices=(*notices, "比較対象の mono 音声が合計 128 MiB を超えます。サンプル数を減らしてください。"))
-                prepared.append(TemplateWaveform(oracle, sample_id, waveform))
+                    return self._result("LIMIT", notices=(*notices, "比較音声とスペクトルの合計が128 MiBを超えます。サンプル数を減らしてください。"))
+                features = spectral_template(waveform.samples[:, 0], self.sample_rate, cancel)
+                bank_bytes += features.nbytes
+                if bank_bytes > MAX_BANK_BYTES:
+                    return self._result("LIMIT", notices=(*notices, "比較音声とスペクトルの合計が128 MiBを超えます。サンプル数を減らしてください。"))
+                prepared.append((TemplateWaveform(oracle, sample_id, waveform), features))
             except OperationCancelled:
                 raise
             except (AudioDataError, OSError, ValueError) as error:
@@ -166,17 +196,22 @@ class OracleClassifier:
                 notices.append(f"{oracle.value} / {sample_id[:8]}：{error}")
         if not prepared:
             return self._result("NO_TEMPLATES", notices=(*notices, "Calibration で Oracle ごとのサンプルを登録してください。"))
+        event_spectrum = spectral_template(event.samples[:, 0], self.sample_rate, cancel)
         scores: dict[OracleId, list[SampleScore]] = {}
-        for item in prepared:
+        for item, features in prepared:
             check_cancel(cancel)
             match = normalized_correlation(event.samples[:, 0], item.clip.samples[:, 0], cancel)
-            scores.setdefault(item.oracle, []).append(SampleScore(item.sample_id, match))
+            spectrum_score = spectral_similarity(event_spectrum, features)
+            combined = self.waveform_weight * match.score + self.spectrum_weight * spectrum_score
+            scores.setdefault(item.oracle, []).append(SampleScore(item.sample_id, match, spectrum_score, combined))
         ranking = []
         for oracle, samples in scores.items():
-            samples.sort(key=lambda s: (-s.match.score, s.sample_id))
+            samples.sort(key=lambda s: (-s.combined_score, s.sample_id))
             selected = samples[:1] if self.aggregation == "best" else samples[:self.top_n]
-            score = float(np.mean([s.match.score for s in selected]))
-            ranking.append(OracleScore(oracle, score, tuple(samples)))
+            waveform_score = float(np.mean([s.waveform_score for s in selected]))
+            spectrum_score = float(np.mean([s.spectrum_score for s in selected]))
+            score = self.waveform_weight * waveform_score + self.spectrum_weight * spectrum_score
+            ranking.append(OracleScore(oracle, score, tuple(samples), waveform_score, spectrum_score))
         canonical = {oracle: index for index, oracle in enumerate(OracleId)}
         ranking.sort(key=lambda s: (-s.score, canonical[s.oracle]))
         if ranking[0].score == 0:

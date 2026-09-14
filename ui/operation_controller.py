@@ -107,9 +107,14 @@ class OperationController(QObject):
                                       if self.classifier is not None else None)
                     event = OperationResult(task.kind, analysis=analysis, classification=classification)
                     if classification is not None:
-                        logger.info("Waveform ranking: status=%s oracle=%s best=%s second=%s score=%s samples=%s",
+                        logger.info("Combined ranking: status=%s oracle=%s best=%s second=%s score=%s samples=%s",
                                     classification.status, classification.oracle, classification.best_score,
                                     classification.second_candidate, classification.second_score, classification.sample_count)
+                    if classification is not None and classification.ranking:
+                        first = classification.ranking[0]
+                        logger.debug("Score components: waveform=%s spectrum=%s combined=%s weights=%s/%s",
+                                     first.waveform_score, first.spectrum_score, first.combined_score,
+                                     classification.waveform_weight, classification.spectrum_weight)
                     logger.info(
                         "Audio analyzed: %s Hz / %s ch -> %s Hz / 1 ch, %s frames, sha256=%s",
                         analysis.original.sample_rate, analysis.original.channels,

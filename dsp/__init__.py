@@ -1,1 +1,1 @@
-"""Qt-independent deterministic preprocessing; feature extraction follows later."""
+"""Qt-independent preprocessing, bounded STFT templates and waveform correlation."""

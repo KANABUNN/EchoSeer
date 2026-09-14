@@ -119,6 +119,8 @@ class MainWindow(QMainWindow):
                 recognition.template_aggregation, recognition.top_n,
                 BandpassSettings(recognition.bandpass_low_hz, recognition.bandpass_high_hz)
                 if recognition.bandpass_enabled else None,
+                waveform_weight=recognition.waveform_weight,
+                spectrum_weight=recognition.spectrum_weight,
             )
         self._record_target = None
         self._last_deleted = None

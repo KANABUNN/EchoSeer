@@ -202,9 +202,54 @@ Phase 3 の完了範囲はサンプル管理で、分類器は後続 Phase に�
 .runtime/phase4-real/report.json に保存し、Git 対象外です。
 提供音声と対応画像もローカル samples/ に保持し、Git 対象外です。
 
+
+## Phase 5 — スペクトル解析と複合スコア（2026-09-14）
+
+- [x] Hann STFT、基音・倍音を含む log magnitude と時間区間のスペクトルテンプレート
+- [x] cosine similarity と、減衰に対応した時間区間の比較
+- [x] waveform / spectrum / combined を各サンプルと各 Oracle に保持
+- [x] 初期重み0.60 / 0.40、設定反映、0 / 1の切替、不正な重みの拒否
+- [x] 複合スコアで同じサンプル集合を選び、最高値 / 上位N件平均を適用
+- [x] GUI に複合順位と候補、スコア内訳の波形・スペクトル列、現在の重み
+- [x] 無音・不正な値・短い音声、形式違い、キャンセル、有限で読み取り専用の特徴
+- [x] STFT を32フレームずつ計算し、mono音声と特徴の bank を128 MiB以下に制限
+- [x] 既存 metadata と元音声を変更せず、現在の設定から特徴を再生成
+- [x] 98ケースの Replay Dataset を WAV 保存・再読込と共通 Analyzer で比較
+- [x] 静かな14ケースの正解数が Phase 4 と同じ14/14
+- [x] 白色ノイズ付き84ケースは Phase 4 の83/84から84/84へ改善、悪化ケース0
+- [x] 実 Windows で7種類の全区間・前後区間、ノイズで改善したBの候補と3スコア
+- [x] 通常サイズ・760×600のスコア内訳とスクロール、終了時の全 Oracle worker 0
+- [x] 全 pytest: **343 passed** / pip check 成功（既存299件 + Phase 5 の44件）
+
+Phase 5 の44件は STFT20、複合分類22、GUI1、提供 Replay Dataset1。
+実音声を使う15件（既存14 + Dataset1）はローカル samples/ がない環境では skip します。
+
+| Replay 条件 | 件数 | Phase 4 正解 | Phase 5 正解 |
+|---|---:|---:|---:|
+| 全区間 | 7 | 7 | 7 |
+| 登録0〜1秒 / 比較1.00〜1.75秒 | 7 | 7 | 7 |
+| 白色ノイズ 10 dB | 21 | 21 | 21 |
+| 白色ノイズ 0 dB | 21 | 21 | 21 |
+| 白色ノイズ -10 dB | 21 | 21 | 21 |
+| 白色ノイズ -20 dB | 21 | 20 | 21 |
+
+ノイズ条件は各7音声×固定seed3種。改善したB（-20 dB / seed17）は波形のみL3、
+複合R3で、正解はR3。実画面でも波形0.030760 / スペクトル0.252182 /
+複合0.119329、第2候補L3の複合0.093967を確認した。
+類似度スコアであり、HIGH confidence を認定した結果ではない。
+
+評価レシピは tests/datasets/phase5-oracles.json、再評価は scripts/evaluate_phase5.py。
+生成 WAV / report.json は .runtime/phase5-evaluation/、
+実画面の画像 / report.json は .runtime/phase5-native/ にあり、Git 対象外。
+元 WAV のファイル checksum が評価前後で一致することも確認した。
+
+同じ7録音の区間と人工白色ノイズによる比較で、独立した録音・実戦の評価ではない。
+色付きノイズ・会話・効果音・未知音の誤検出率は未確認。
+confidence、重複除去、連続イベント検出、VoG Sequence は後続 Phase。
+
 ## 後続 Phase — 未実装 / 未検証
 
-- Phase 5–6: スペクトル解析、信頼度判定
+- Phase 6: 信頼度判定
 - Phase 7–9: 実 Oracle 録音の Pass 分離、Round 1～5、一致、不一致、重複、再構成
 - Phase 10–13: Live の認識表示、Oracle Map、Overlay、Calibration、Replay
 - Phase 14–16: Dataset 数値評価、実戦ログ、再接続の実戦調整、Hotkey、UX

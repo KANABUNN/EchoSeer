@@ -1,7 +1,7 @@
-"""Candidate ranking view; waveform similarity is not a confidence probability."""
+"""Candidate ranking view; component and combined similarities are not confidence probabilities."""
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
-    QAbstractItemView, QGroupBox, QHeaderView, QLabel,
+    QAbstractItemView, QCheckBox, QGroupBox, QHeaderView, QLabel,
     QTableWidget, QTableWidgetItem, QVBoxLayout,
 )
 from config.defaults import DEFAULT_ORACLE_LABELS
@@ -11,7 +11,7 @@ from encounter.vog_oracles import OracleId
 
 class RecognitionWidget(QGroupBox):
     def __init__(self, labels: dict[str, str] | None = None) -> None:
-        super().__init__("Oracle 候補 · 波形相関")
+        super().__init__("Oracle 候補 · 複合スコア")
         self.labels = labels or DEFAULT_ORACLE_LABELS
         self.result: ClassificationResult | None = None
         layout = QVBoxLayout(self)
@@ -23,8 +23,13 @@ class RecognitionWidget(QGroupBox):
             label.setWordWrap(True)
             label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
             layout.addWidget(label)
-        self.table = QTableWidget(7, 4)
-        self.table.setHorizontalHeaderLabels(("順位", "Oracle", "波形スコア", "サンプル数"))
+        self.details_checkbox = QCheckBox("スコア内訳を表示")
+        layout.addWidget(self.details_checkbox)
+        self.weights_label = QLabel()
+        self.weights_label.setTextFormat(Qt.TextFormat.PlainText)
+        layout.addWidget(self.weights_label)
+        self.table = QTableWidget(7, 6)
+        self.table.setHorizontalHeaderLabels(("順位", "Oracle", "複合スコア", "サンプル数", "波形", "スペクトル"))
         self.table.verticalHeader().hide()
         self.table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
         self.table.setSelectionMode(QAbstractItemView.SelectionMode.NoSelection)
@@ -39,7 +44,9 @@ class RecognitionWidget(QGroupBox):
         """)
         self.table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.ResizeToContents)
         self.table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
-        self.table.setAccessibleName("Oracle 候補の波形スコア順位")
+        self.table.setAccessibleName("Oracle 候補の複合スコア順位と内訳")
+        self.details_checkbox.toggled.connect(self._show_details)
+        self._show_details(False)
         layout.addWidget(self.table)
         self.status_label = QLabel()
         self.status_label.setTextFormat(Qt.TextFormat.PlainText)
@@ -51,6 +58,10 @@ class RecognitionWidget(QGroupBox):
         layout.addWidget(self.warning_label)
         self.clear()
 
+    def _show_details(self, enabled: bool) -> None:
+        self.table.setColumnHidden(4, not enabled)
+        self.table.setColumnHidden(5, not enabled)
+
     def _name(self, oracle: OracleId) -> str:
         return f"{oracle.value} · {self.labels[oracle.value]}"
 
@@ -59,6 +70,7 @@ class RecognitionWidget(QGroupBox):
         self.best_label.setText("第1候補：—")
         self.second_label.setText("第2候補：—")
         self.margin_label.setText("スコア差：—")
+        self.weights_label.setText("波形とスペクトルを比較します。")
         self.table.clearContents()
         for row, oracle in enumerate(OracleId):
             self.table.setItem(row, 1, QTableWidgetItem(self._name(oracle)))
@@ -71,6 +83,7 @@ class RecognitionWidget(QGroupBox):
         self.result = result
         if result is None:
             return
+        self.weights_label.setText(f"複合 = 波形 × {result.waveform_weight:.4f} + スペクトル × {result.spectrum_weight:.4f}")
         if result.best_candidate is not None:
             self.best_label.setText(f"第1候補：{self._name(result.best_candidate)} / {result.best_score:.6f}")
         if result.second_candidate is not None:
@@ -82,20 +95,22 @@ class RecognitionWidget(QGroupBox):
         for row, (oracle, item) in enumerate(rows):
             texts = (str(row + 1) if item else "—", self._name(oracle),
                      f"{item.score:.6f}" if item else "未比較",
-                     str(len(item.samples)) if item else "0")
+                     str(len(item.samples)) if item else "0",
+                     f"{item.waveform_score:.6f}" if item else "未比較",
+                     f"{item.spectrum_score:.6f}" if item else "未比較")
             for column, text in enumerate(texts):
                 self.table.setItem(row, column, QTableWidgetItem(text))
         messages = {
-            "RANKED": "暫定候補です。波形スコアは確率ではありません。",
+            "RANKED": "暫定候補です。類似度スコアは確率ではありません。",
             "TIED": "上位候補が同点またはほぼ同点です。Oracle を確定しません。",
             "SILENT": "無音のため Oracle 候補を出しません。",
             "NO_TEMPLATES": "比較できるサンプルがありません。",
-            "NO_MATCH": "波形の一致がありません。Oracle を確定しません。",
+            "NO_MATCH": "特徴の一致がありません。Oracle を確定しません。",
             "TOO_SHORT": "音声区間が短すぎます。",
             "TOO_LONG": "1 つの Oracle を含む短い音声区間を選んでください。",
             "LIMIT": "比較対象の音声が多すぎます。",
         }
-        aggregation = ("各 Oracle の最高スコア" if result.aggregation == "best"
+        aggregation = ("各 Oracle の最高複合スコア" if result.aggregation == "best"
                        else f"各 Oracle の上位 {result.top_n} 件平均")
         self.status_label.setText(f"{messages[result.status]}\n{aggregation} / {result.sample_count} サンプルを比較")
         notices = list(result.notices)

@@ -30,7 +30,7 @@ def test_seven_distinct_tones_with_gain_dc_phase_rate_and_padding(index,oracle,r
     query=oracle_wave(index,rate,phase=.15,amplitude=.07,dc=.08)
     samples=np.stack((query.samples[:,0],query.samples[:,0]*.6),axis=1)
     samples=np.pad(samples,((round(rate*.013),round(rate*.02)),(0,0)))
-    result=OracleClassifier(templates=seven_templates()).classify(AudioClip(samples,rate))
+    result=OracleClassifier(templates=seven_templates(),waveform_weight=1,spectrum_weight=0).classify(AudioClip(samples,rate))
     assert result.oracle==oracle and result.status=="RANKED"
     assert result.best_score>.95 and result.second_score<.2
     assert not result.missing_oracles and result.sample_count==7
@@ -45,8 +45,8 @@ def test_multiple_samples_group_by_oracle_and_top_n_mean_changes_aggregation():
         TemplateWaveform(OracleId.L1,"weak",oracle_wave(3)),
         TemplateWaveform(OracleId.R1,"other",oracle_wave(1)),
     )
-    best=OracleClassifier(templates=templates).classify(query)
-    mean=OracleClassifier(templates=templates,aggregation="top_n_mean",top_n=2).classify(query)
+    best=OracleClassifier(templates=templates,waveform_weight=1,spectrum_weight=0).classify(query)
+    mean=OracleClassifier(templates=templates,aggregation="top_n_mean",top_n=2,waveform_weight=1,spectrum_weight=0).classify(query)
     assert best.best_candidate==mean.best_candidate==OracleId.L1
     assert best.best_score==pytest.approx(1,abs=1e-10)
     scores=mean.ranking[0].samples

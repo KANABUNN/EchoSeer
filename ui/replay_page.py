@@ -1,4 +1,4 @@
-"""Replay: shared audio conversion, Oracle waveform ranking and explicit export."""
+"""Replay: shared audio conversion, Oracle waveform/spectrum ranking and explicit export."""
 
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import (
@@ -82,7 +82,7 @@ class ReplayPage(QWidget):
         export_layout.addWidget(self.encoding_combo, 1)
         export_layout.addWidget(self.save_button)
         layout.addWidget(export_group)
-        note = QLabel("Phase 4 は波形相関の暫定候補です。スペクトル比較と信頼度判定は後続 Phase で追加します。")
+        note = QLabel("Phase 5 は波形とスペクトルによる暫定候補です。信頼度判定は次の Phase で追加します。")
         note.setObjectName("subtitle")
         note.setWordWrap(True)
         layout.addWidget(note)

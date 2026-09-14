@@ -339,3 +339,50 @@ Live のコピーと WAV の順位一致、分類中も取得が進むこと、Q
 
 次は Phase 5 — STFT / スペクトルテンプレート / cosine similarity /
 波形とスペクトルの複合スコア・設定可能な重み。
+
+## Phase 5 — STFT と複合分類（2026-09-14）
+
+dsp.spectrum の spectral_template は Hann窓128 ms・hop10 msの ShortTimeFFT を使う。
+窓長の2倍以上の2べき長でFFTし、100〜8000 Hz（Nyquist以下）を保持。
+全区間と8時間区間の平均powerを作り、周波数方向31binの局所中央値の1.5倍を除去。
+残るmagnitudeをpeak正規化してlog1pへ変換する。
+近い低周波成分を分離し、広帯域ノイズの弱い成分を過大評価しないための処理。
+
+spectral_similarity は全区間cosineの25%と、各有効なイベント時間区間から
+最も近いテンプレート区間へのcosine平均75%を使用する。
+Oracle音の減衰で倍音のバランスが変わるため、時刻・長さが異なる区間も比較できる。
+絶対時刻やVoGの順序を判定する処理ではない。
+特徴は有限の実数と周波数軸を検証し、所有するreadonly float32配列として保持。
+STFTは32列ずつ計算してキャンセルを確認し、192 kHzでも複素作業領域を分割する。
+
+OracleClassifier は既存の波形相関に spectrum_score と combined_score を追加した。
+SampleScore / OracleScore に3スコア、ClassificationResultに実際の重みを保持する。
+score / best_score / second_score と順位は複合スコアになる。
+集約時は複合順で選んだ同じサンプルの成分を平均する。
+コンストラクターで重みの型・範囲・合計を検証し、許容誤差内の合計を1へ正規化。
+waveform_weight=1 / spectrum_weight=0 はPhase 4の順位を維持する。
+Debugの内訳用に重み0の成分も計算する。
+waveformと特徴を合わせてbank128 MiBを適用する。既存native音声から毎回再生成し、
+保存済み sample.wav / original.wav / metadata を変更しない。
+
+MainWindowが既存設定の重みをworkerへ注入し、RecognitionWidgetは複合順位を表示。
+スコア内訳のcheckboxで波形・スペクトル列を追加し、現在の重みも表示する。
+再解析・失敗時には古い6列の値を消す。OperationControllerのdebugログにも3成分を出す。
+Phase 4の波形値の範囲を確認するテストは明示的な1 / 0の重みで維持し、
+Phase 5の7種類×2レートの合成音比較を別途追加した。
+
+評価レシピとscripts/evaluate_phase5.pyで98ケースをWAV生成・再読込・共通Analyzerに通す。
+提供7音声の全区間と重ならない区間はPhase 4 / 5とも14/14。
+白色ノイズ（SNR10 / 0 / -10 / -20 dB、seed17 / 37 / 73）は83/84から84/84、
+悪化0件・改善1件。Bの-20 dB / seed17はL3から正解R3へ変わった。
+ノイズでの改善は同じ録音と固定した人工ノイズ条件に限定した結果。
+レシピ・元ファイルhash・候補・各Oracleの3成分をreport.jsonに保存する。
+
+新規44テストはSTFT20 / 複合分類22 / GUI1 / 任意実音声Dataset1。
+全体 **343 passed**（81.46秒）/ pip check 成功。既存の取得・録音・削除・再生・保存も確認。
+実Windowsで全区間7/7・前後区間7/7・改善したノイズ音声の内訳を確認し、
+通常と760×600の画像を検査。全workerが終了し、exit code 0。
+評価と画像は .runtime/phase5-evaluation/ / .runtime/phase5-native/、Git対象外。
+
+次はPhase 6 — Confidence Engine、best threshold、margin、
+HIGH / MEDIUM / LOW / REJECTED、duplicate cooldown、uncertain event logging。
