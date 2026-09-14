@@ -1,1 +1,1 @@
-"""Fixed VoG Oracle identities; sequence validation follows in later phases."""
+"""VoG Oracle identities, round definitions and presentation state machine."""

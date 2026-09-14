@@ -1,6 +1,6 @@
 """Single file/analysis worker, isolated from the capture worker and Qt widgets."""
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 import logging
 from pathlib import Path
 from queue import Empty, Queue
@@ -13,6 +13,8 @@ from audio.operations import OperationCancelled, check_cancel
 from audio.sources import AudioSource
 from audio.waveio import write_wav
 from replay.analyzer import AnalysisResult, Analyzer
+from replay.sequence_analyzer import ReplaySequenceAnalyzer, SequenceAnalysisResult
+from config.schema import SequenceSettings
 from detector.classifier import ClassificationResult, OracleClassifier
 from detector.confidence import ConfidenceEngine, DetectionResult, EventContext
 from logging_ext.recognition_logger import RecognitionRecorder, PersistenceResult
@@ -27,6 +29,7 @@ class OperationTask:
     path: Path | None = None
     clip: AudioClip | None = None
     encoding: str = "float32"
+    round_index: int = 1
 
 
 @dataclass(frozen=True, slots=True)
@@ -39,22 +42,26 @@ class OperationResult:
     classification: ClassificationResult | None = None
     detection: DetectionResult | None = None
     persistence: PersistenceResult | None = None
+    sequence: SequenceAnalysisResult | None = None
 
 
 class OperationController(QObject):
     finished = Signal(object)
     busy_changed = Signal(bool)
+    sequence_progress = Signal(object)
 
     def __init__(
         self, sample_rate: int = 48000, parent: QObject | None = None,
         analyzer: Analyzer | None = None, classifier: OracleClassifier | None = None,
         confidence: ConfidenceEngine | None = None, recorder: RecognitionRecorder | None = None,
+        sequence_settings: SequenceSettings | None = None,
     ) -> None:
         super().__init__(parent)
         self.analyzer = analyzer or Analyzer(sample_rate)
         self.classifier = classifier
         self.confidence = confidence or ConfidenceEngine()
         self.recorder = recorder
+        self.sequence_settings = replace(sequence_settings or SequenceSettings())
         self._queue: Queue[OperationTask] = Queue()
         self._closing = Event()
         self._thread: Thread | None = None
@@ -71,6 +78,9 @@ class OperationController(QObject):
 
     def analyze(self, source: AudioSource, live: bool = False) -> bool:
         return self._submit(OperationTask("live" if live else "wave", source=source))
+
+    def analyze_sequence(self, source: AudioSource, round_index: int = 1, live: bool = False) -> bool:
+        return self._submit(OperationTask("live_sequence" if live else "sequence", source=source, round_index=round_index))
 
     def dump(self, source: AudioSource, path: Path) -> bool:
         return self._submit(OperationTask("dump", source=source, path=path))
@@ -108,25 +118,40 @@ class OperationController(QObject):
                 continue
             try:
                 check_cancel(self._closing)
-                if task.kind in ("wave", "live"):
+                if task.kind in ("wave", "live", "sequence", "live_sequence"):
                     analysis = self.analyzer.analyze(task.source, self._closing)
-                    classification = (self.classifier.classify_preprocessed(analysis.processed, self._closing)
-                                      if self.classifier is not None else None)
-                    detection = persistence = None
-                    if classification is not None:
-                        context = (getattr(task.source, "event_context", None) if task.kind == "live"
-                                   else EventContext(timestamp=analysis.original.duration_seconds,
-                                                     start_frame=0, end_frame=analysis.original.frame_count))
-                        if task.kind == "live" and context is None:
-                            raise ValueError("Live confidence requires timestamped audio")
-                        detection = self.confidence.evaluate(classification, context)
-                        if self.recorder is not None:
-                            persistence = self.recorder.record(detection, classification, analysis.original,
-                                                               analysis.checksum, self._closing)
-                        logger.debug("Confidence: level=%s oracle=%s reason=%s duplicate=%s",
-                                     detection.status, detection.oracle, detection.reason, detection.duplicate)
-                    event = OperationResult(task.kind, analysis=analysis, classification=classification,
-                                            detection=detection, persistence=persistence)
+                    if task.kind in ("sequence", "live_sequence"):
+                        pipeline = ReplaySequenceAnalyzer(
+                            self.classifier or OracleClassifier(sample_rate=self.analyzer.sample_rate),
+                            self.confidence.settings, self.sequence_settings, self.recorder, self.analyzer)
+                        sequence = pipeline.analyze(analysis, task.round_index, self._closing,
+                                                    self.sequence_progress.emit,
+                                                    getattr(task.source, "event_context", None)
+                                                    if task.kind == "live_sequence" else None)
+                        last = sequence.traces[-1] if sequence.traces else None
+                        classification = last.classification if last else None
+                        detection = last.detection if last else None
+                        persistence = PersistenceResult(notices=sequence.notices)
+                        event = OperationResult(task.kind, analysis=analysis, classification=classification,
+                                                detection=detection, persistence=persistence, sequence=sequence)
+                    else:
+                        classification = (self.classifier.classify_preprocessed(analysis.processed, self._closing)
+                                          if self.classifier is not None else None)
+                        detection = persistence = None
+                        if classification is not None:
+                            context = (getattr(task.source, "event_context", None) if task.kind == "live"
+                                       else EventContext(timestamp=analysis.original.duration_seconds,
+                                                         start_frame=0, end_frame=analysis.original.frame_count))
+                            if task.kind == "live" and context is None:
+                                raise ValueError("Live confidence requires timestamped audio")
+                            detection = self.confidence.evaluate(classification, context)
+                            if self.recorder is not None:
+                                persistence = self.recorder.record(detection, classification, analysis.original,
+                                                                   analysis.checksum, self._closing)
+                            logger.debug("Confidence: level=%s oracle=%s reason=%s duplicate=%s",
+                                         detection.status, detection.oracle, detection.reason, detection.duplicate)
+                        event = OperationResult(task.kind, analysis=analysis, classification=classification,
+                                                detection=detection, persistence=persistence)
                     if classification is not None:
                         logger.debug("Combined ranking: status=%s oracle=%s best=%s second=%s score=%s samples=%s",
                                     classification.status, classification.oracle, classification.best_score,

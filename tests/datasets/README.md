@@ -21,3 +21,19 @@ scripts/evaluate_phase5.py で WAV を生成・再読込して波形のみと複
 詳細は docs/recognition.md / docs/acceptance.md を参照してください。
 
 これは同じ録音と人工ノイズの比較で、独立録音・実戦・VoGの順序評価ではありません。
+
+## Phase 7 のPASS分離レシピ
+
+[phase7-oracles.json](phase7-oracles.json) は A〜G の実録音に無音を挟み、
+Round 1〜5の3 / 4 / 5 / 6 / 7個を2回提示に組む条件です。
+scripts/evaluate_phase7.py は全5ラウンドと欠落・不一致・ノイズ・途中切れ・短いPASS間隔の
+計10 WAVを生成・再読込し、独立したPASS・状態・フレーム時刻・元ファイルの保全を検証します。
+
+```powershell
+.\.venv\Scripts\python.exe scripts\evaluate_phase7.py
+```
+
+元の提供音声がある環境では test_phase7_dataset.py も実行します。
+出力は .runtime/phase7-evaluation/、音声は同梱しません。
+声は実録音、無音・連結・提示間隔は人工設定です。実戦の通し録音の評価とは区別します。
+詳細は [sequence.md](../../docs/sequence.md)。

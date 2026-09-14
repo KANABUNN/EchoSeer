@@ -424,3 +424,40 @@ RecognitionWidget は採用Oracle / unknown と信頼度を先に表示し、順
 詳細は docs/confidence.md と docs/acceptance.md。
 
 次は Phase 7 — Sequence FSM。連続イベントの切り出し・PASS・順序処理は未実装。
+
+## Phase 7 — VoG Sequence FSM（2026-09-14）
+
+encounter.definition の EncounterDefinition に各Roundの期待個数を置き、
+Qt非依存の SequenceEngine / SequenceEntry / SequenceSnapshot / StateTransition を追加した。
+IDLE → ARMED → PASS_1 → WAIT_PASS_2 → PASS_2 → VERIFY を実入力で進める。
+CONFIRMED / UNCERTAIN / LOCKOUT、Next Round / Reset、確定後の連続無音解除もFSMに実装した。
+confirmはPhase 8用フックで、採用済み・完全・一致・重複なしの場合だけ許可する。
+Phase 7のReplayはconfirmを呼ばず、照合前の列を確定しない。
+
+PASS1/PASS2は独立したtupleに保存する。生の全候補と信頼度・音声時刻を残して、
+後続のPassComparatorと再構成が参照できる。unknownはスロットを占め、duplicateは追加しない。
+途中の長い無音で期待個数に届かなければUNCERTAINに止め、次のPASSを埋め合わせに使わない。
+待機のタイムアウトは前の音の終了時刻から数え、音そのものの長さを待機時間に含めない。
+
+detector.events はnative音声を20ms単位でDC除去したRMSで検出する。
+60ms pre-rollと120ms連続quietのreleaseを含む所有コピーを切り出し、
+共通Analyzer → 既存OracleClassifier → ConfidenceEngine → SequenceEngineへ渡す。
+80ms未満の音、入力先頭・EOFで切れた音、上限を超える音はunknownにして候補を保存する。
+1窓は3秒 / 16 MiB、候補128、入力120秒で制限し、キャンセルをブロックごとに確認する。
+ReplaySequenceAnalyzerは有限Replayと保持Live音声を共有し、nativeフレームと開始時刻を保持する。
+
+OperationControllerの既存ワーカーに順序解析を追加し、途中の不変snapshotをQueued Signalで表示する。
+SequenceWidgetは2つのPASSと各音の信頼度・スコアを表示し、Next Round / Resetで期待個数を選び直す。
+Live入力は処理開始時にコピーし、Replayから同じ区間を再解析できる。
+自動で全セッションを追跡する機能は追加せず、既存の単一音Liveの重複履歴も維持する。
+JSONLには音ごとのround / pass / indexとPASS全体のsummaryを別レコードで保存する。
+保存失敗の警告は解析結果と手動保存を維持して表示する。
+
+新規65件、全 **477 passed**（136.69秒）/ pip check成功。
+提供個別録音を組んだ全5ラウンドの50イベントで正しいOracle・PASS分離を確認した。
+欠落・不一致・ノイズ・EOF・間隔不足の5ケース、実Windowsの7個表示・有限Liveコピーの
+再解析・Next Round / Reset・全worker解放も確認した。原音・設定・テンプレートは変更していない。
+連結と提示間隔は人工的で、残響が重なる実戦の通し録音は未検証。
+手順・制限は docs/sequence.md、記録は docs/acceptance.md。
+
+次は Phase 8 — PassComparator と2回照合。

@@ -105,14 +105,18 @@ class MainWindow(QMainWindow):
             self.settings.audio.internal_sample_rate, parent=self,
             confidence=ConfidenceEngine(self.settings.recognition),
             recorder=RecognitionRecorder(data_root / "logs", self.settings.logging),
+            sequence_settings=self.settings.sequence,
         )
         self.operations.finished.connect(self._on_operation, Qt.ConnectionType.QueuedConnection)
         self.operations.busy_changed.connect(self._on_operation_busy)
         self.replay_page.open_requested.connect(self._open_wave)
         self.replay_page.analyze_requested.connect(self._analyze_wave)
+        self.replay_page.sequence_requested.connect(self._analyze_sequence)
+        self.operations.sequence_progress.connect(self._on_sequence_progress, Qt.ConnectionType.QueuedConnection)
         self.replay_page.save_requested.connect(self._save_processed)
         self.live_page.replay_requested.connect(self._analyze_live)
         self.live_page.dump_requested.connect(self._dump_live)
+        self.live_page.sequence_requested.connect(self._analyze_live_sequence)
         self.templates = templates or TemplateController(
             data_root / "templates", self.settings.audio.internal_sample_rate, parent=self,
         )
@@ -241,6 +245,24 @@ class MainWindow(QMainWindow):
             if self.operations.analyze(self.replay_page.source):
                 self.replay_page.begin_analysis()
 
+    @Slot(object)
+    def _on_sequence_progress(self, snapshot) -> None:
+        if not self._closing:
+            self.replay_page.sequence.set_result(snapshot)
+
+    @Slot()
+    def _analyze_sequence(self) -> None:
+        page = self.replay_page
+        if page.source is not None and self.operations.analyze_sequence(page.source, page.sequence.round_index):
+            page.begin_analysis()
+
+    @Slot()
+    def _analyze_live_sequence(self) -> None:
+        source = self._live_source()
+        if source is not None and self.operations.analyze_sequence(source, self.replay_page.sequence.round_index, live=True):
+            self.replay_page.begin_analysis()
+            self.tabs.setCurrentIndex(1)
+
     def _live_source(self) -> LiveSource | None:
         ring = self.controller.service.buffer
         return LiveSource(ring) if ring is not None and ring.size_frames > 0 else None
@@ -280,6 +302,8 @@ class MainWindow(QMainWindow):
     def _on_operation(self, event: OperationResult) -> None:
         if self._closing:
             return
+        if (event.error or event.cancelled) and event.kind in ("sequence", "live_sequence"):
+            self.replay_page.sequence.clear()
         if event.error:
             if event.kind == "dump":
                 self.live_page.message_label.setText(event.error)
@@ -288,9 +312,12 @@ class MainWindow(QMainWindow):
         elif event.cancelled:
             self.replay_page.show_error("処理を中止しました。")
         elif event.analysis is not None:
-            self.replay_page.set_result(event.analysis, live=event.kind == "live")
+            self.replay_page.set_result(event.analysis, live=event.kind in ("live", "live_sequence"))
             self.replay_page.recognition.set_result(event.classification)
             self.replay_page.recognition.set_detection(event.detection)
+            if event.sequence is not None:
+                self.replay_page.recognition.setTitle("最後の音の候補 · 複合スコア")
+                self.replay_page.sequence.set_result(event.sequence.snapshot)
             if event.persistence is not None and event.persistence.notices:
                 self.replay_page.recognition.append_notices(event.persistence.notices)
         elif event.path is not None:

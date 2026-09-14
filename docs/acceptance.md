@@ -249,8 +249,8 @@ confidence、重複除去、連続イベント検出、VoG Sequence は後続 Ph
 
 ## 後続 Phase — 未実装 / 未検証
 
-- Phase 6: 信頼度判定
-- Phase 7–9: 実 Oracle 録音の Pass 分離、Round 1～5、一致、不一致、重複、再構成
+- Phase 8–9: 2回照合、一致、不一致、VoG重複ルール、再構成
+- 実戦通し録音での提示間隔・音の重なりを含むPass分離・採用精度
 - Phase 10–13: Live の認識表示、Oracle Map、Overlay、Calibration、Replay
 - Phase 14–16: Dataset 数値評価、実戦ログ、再接続の実戦調整、Hotkey、UX
 - Phase 17: Python がない Windows での onedir EXE 起動
@@ -300,4 +300,42 @@ GUI は offscreen とデバイス代替を用います。提供音声を使う16
 
 - [ ] 独立した Oracle 録音・会話・効果音での採用率と誤検出率
 - [ ] Destiny 2 実行中の連続イベント切り出しと重複判定
-- [ ] Phase 7 Sequence FSM と PASS / 順序の判定
+- [x] Phase 7 Sequence FSM と有限録音の PASS 分離（下記）
+
+## Phase 7 — 実装・自動テスト確認済み（2026-09-14）
+
+- [x] Qt非依存 SequenceEngine と全9状態、Encounter定義で3 / 4 / 5 / 6 / 7個
+- [x] PASS1 / PASS2 の独立した不変スナップショット、候補順位・信頼度・開始/終了時刻の保持
+- [x] HIGH / MEDIUM の採用、unknown の位置保持、抑制したduplicateは個数に含めない
+- [x] PASS間隔、音の欠落・タイムアウト、音声終了、source変更・時刻逆行で UNCERTAIN
+- [x] confirmの遷移フックは不一致・unknown・重複・不完全な列を拒否、確定後LOCKOUTと連続無音
+- [x] native音声で20ms RMS、DC除去・ヒステリシス、60ms pre-roll / 120ms quiet release
+- [x] 微小音・DC・短音、途中切れ、長い音、最大3秒 / 16 MiB、128候補、入力120秒の制限
+- [x] Replay と有限 LiveSource で共通処理、取得ワーカーを止めず Qt メインスレッドに途中経過を表示
+- [x] 解析失敗・キャンセル時に途中結果を消去、Next Round / Reset、解析中の終了で全ワーカー解放
+- [x] JSONL にイベントのround / pass / indexと独立PASSのまとめを保存、両OFF・保存失敗を確認
+- [x] Phase 7 新規65件、全 **477 passed**（136.69秒）/ pip check 成功
+
+17件はローカルの提供録音を使う任意テストで、音声がない環境ではskipします。
+録音済みの A〜G から3〜7個を2回提示に組み、float32 WAV保存・再読込後、
+全5ラウンドの計50イベントを正しいOracle・順序で分離しました。結果はすべてVERIFYです。
+欠落、PASS不一致、-20dB白色ノイズ、EOF途中切れ、短いPASS間隔の5追加ケースも通りました。
+不一致はPhase 7では独立列として保存し、照合待ちにします。CONFIRMEDは出力しません。
+
+## Phase 7 — 実 Windows / 提供音声確認
+
+- [x] Qt platform windows、1024×820と760×700の画面でPASSの文字・全7個の表示を画像検査
+- [x] 通常保存先の既存7テンプレートでRound 1 / Round 5を解析、正しい2つのPASSを表示
+- [x] 欠落・ノイズ・EOF・間隔不足のUNCERTAIN、不一致の独立保存・VERIFYを表示
+- [x] 全Round 1音声を30秒の有限LiveSourceへ入れ、Replayコピーで同じ採用列になることを確認
+- [x] Next Round / Reset、進捗のメインスレッド更新、全ワーカー解放、exit code 0
+- [x] 提供WAV・既存テンプレート・config.jsonのSHA-256が変更前後で一致
+
+レシピは tests/datasets/phase7-oracles.json、再評価は scripts/evaluate_phase7.py。
+生成WAV / report.jsonは .runtime/phase7-evaluation/、画面画像 / report.jsonは
+.runtime/phase7-native/ に保存し、Git対象外です。
+
+各声は実 Oracle 録音ですが、連結と無音・提示間隔は人工的に設定しています。
+通し録音・独立録音・会話や効果音・残響の重なりを含む実戦精度を確認した結果ではありません。
+音の重なりを1イベントとして検出すると unknown・不足になり得ます。初期閾値は未校正です。
+取得し続けるLiveの全ラウンド追跡、Phase 8の2回照合、Phase 9の再構成は後続です。

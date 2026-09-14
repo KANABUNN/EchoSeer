@@ -1,0 +1,11 @@
+{
+  "version": 1,
+  "description": "Supplied individual Oracle recordings joined into two presentations. Cadence and silence are synthetic.",
+  "order": ["F.wav", "E.wav", "C.wav", "A.wav", "G.wav", "D.wav", "B.wav"],
+  "initial_silence_seconds": 0.5,
+  "between_cues_seconds": 0.5,
+  "between_passes_seconds": 2.6,
+  "final_silence_seconds": 1.0,
+  "noise_snr_db": -20,
+  "noise_seed": 17
+}

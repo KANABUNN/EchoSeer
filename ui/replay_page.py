@@ -9,11 +9,13 @@ from PySide6.QtWidgets import (
 from audio.sources import AudioSource, ClipSource, WaveFileSource
 from replay.analyzer import AnalysisResult
 from ui.recognition_widget import RecognitionWidget
+from ui.sequence_widget import SequenceWidget
 
 
 class ReplayPage(QWidget):
     open_requested = Signal()
     analyze_requested = Signal()
+    sequence_requested = Signal()
     save_requested = Signal()
 
     def __init__(self, parent: QWidget | None = None, labels: dict[str, str] | None = None) -> None:
@@ -40,13 +42,16 @@ class ReplayPage(QWidget):
         row.addWidget(self.open_button)
         row.addWidget(self.analyze_button)
         source_layout.addLayout(row)
-        self.message_label = QLabel("1 つの Oracle を含む WAV、または Live の直近音声を比較できます。")
+        self.message_label = QLabel("1 音の比較は Analyze、2 回提示を含む音声は「順序を解析」で確認できます。")
         self.message_label.setTextFormat(Qt.TextFormat.PlainText)
         self.message_label.setWordWrap(True)
         self.message_label.setObjectName("audioMessage")
         source_layout.addWidget(self.message_label)
         layout.addWidget(source_group)
 
+        self.sequence = SequenceWidget(labels)
+        self.sequence.analyze_requested.connect(self.sequence_requested.emit)
+        layout.addWidget(self.sequence)
         self.recognition = RecognitionWidget(labels)
         layout.addWidget(self.recognition)
         summary = QGroupBox("音声形式")
@@ -97,20 +102,24 @@ class ReplayPage(QWidget):
         self.path_label.setText(str(path))
         self.path_label.setToolTip(str(path))
         self._clear_result()
-        self.message_label.setText("Analyze で音声を読み込み、登録サンプルと比較します。")
+        self.message_label.setText("1 音は Analyze、1 ラウンド全体は Round を選んで「順序を解析」を押します。")
         self._update_controls()
 
     def _clear_result(self) -> None:
         self.result = None
         self._checksum = None
         self.recognition.clear()
+        self.recognition.setTitle("Oracle 候補 · 複合スコア")
+        self.sequence.clear()
         self.notice_label.clear()
         for labels in self.values.values():
             for label in labels:
                 label.setText("—")
 
     def begin_analysis(self) -> None:
+        self.sequence.clear()
         self.recognition.clear()
+        self.recognition.setTitle("Oracle 候補 · 複合スコア")
         # Keep only the checksum for comparison; a failed read must not export old audio.
         self.result = None
         self.notice_label.clear()
@@ -121,6 +130,7 @@ class ReplayPage(QWidget):
 
     def set_result(self, result: AnalysisResult, live: bool = False) -> None:
         self.recognition.clear()
+        self.recognition.setTitle("Oracle 候補 · 複合スコア")
         if live:
             self.source = ClipSource(result.original)
             self.path_label.setText("Live の直近音声（解析開始時のコピー）")
@@ -166,6 +176,8 @@ class ReplayPage(QWidget):
         self.message_label.setText(message)
 
     def _update_controls(self) -> None:
+        self.sequence.set_available(self.source is not None)
+        self.sequence.set_busy(self._busy)
         self.open_button.setEnabled(not self._busy)
         self.analyze_button.setEnabled(not self._busy and self.source is not None)
         self.save_button.setEnabled(not self._busy and self.result is not None)

@@ -56,7 +56,8 @@ class RecognitionRecorder:
         self.events = EventLogger(self.logs / "sessions" / f"{session}.jsonl", self.settings.event_logs)
 
     def record(self, detection: DetectionResult, classification: ClassificationResult,
-               original: AudioClip, checksum: str, cancel: Event | None = None) -> PersistenceResult:
+               original: AudioClip, checksum: str, cancel: Event | None = None,
+               sequence: dict | None = None) -> PersistenceResult:
         check_cancel(cancel)
         event_id = uuid4().hex
         wall_time = time.time()
@@ -80,7 +81,12 @@ class RecognitionRecorder:
         event_path = None
         if self.settings.event_logs:
             payload = {
-                "schema_version": 1, "event_id": event_id, "timestamp": wall_time,
+                "schema_version": 1, "event_type": "oracle", "event_id": event_id, "timestamp": wall_time,
+                "round": sequence.get("round") if sequence else None,
+                "pass": sequence.get("pass") if sequence else None,
+                "index": sequence.get("index") if sequence else None,
+                "sequence_state": sequence.get("state") if sequence else None,
+                "sequence_reason": sequence.get("reason") if sequence else None,
                 "monotonic_time": time.monotonic(), "event_time": detection.timestamp, "source": asdict(detection.context),
                 "oracle": detection.oracle.value if detection.oracle else None,
                 "best_candidate": detection.best_candidate.value if detection.best_candidate else None,
@@ -109,3 +115,36 @@ class RecognitionRecorder:
                 logger.exception("Could not save recognition event")
                 notices.append("認識ログを保存できませんでした。保存先・空き容量を確認してください。")
         return PersistenceResult(event_path, audio_path, tuple(notices))
+
+    def record_sequence(self, snapshot, checksum: str, cancel: Event | None = None) -> PersistenceResult:
+        check_cancel(cancel)
+        if not self.settings.event_logs:
+            return PersistenceResult()
+        def entry(item):
+            event = item.detection
+            return {"oracle": item.oracle.value if item.oracle else None,
+                    "best_candidate": event.best_candidate.value if event.best_candidate else None,
+                    "confidence": event.confidence, "confidence_level": event.status.value,
+                    "second_candidate": event.second_candidate.value if event.second_candidate else None,
+                    "second_score": event.second_score, "margin": event.margin,
+                    "onset": item.timestamp, "end": item.end_time, "reason": event.reason}
+        payload = {
+            "schema_version": 1, "event_type": "sequence", "event_id": uuid4().hex,
+            "event_time": snapshot.timestamp, "round": snapshot.round_index,
+            "expected_count": snapshot.expected_count, "state": snapshot.state.value,
+            "reason": snapshot.reason, "confirmed": snapshot.confirmed,
+            "final_sequence": [o.value for o in snapshot.final_sequence] if snapshot.final_sequence else None,
+            "pass1": [entry(item) for item in snapshot.pass1], "pass2": [entry(item) for item in snapshot.pass2],
+            "checksum": checksum, "ignored_events": snapshot.ignored_events,
+            "transitions": [{"from": t.before.value, "to": t.after.value,
+                             "event_time": t.timestamp, "reason": t.reason} for t in snapshot.transitions],
+        }
+        try:
+            check_cancel(cancel)
+            self.events.write(payload)
+            return PersistenceResult(event_path=self.events.path)
+        except OperationCancelled:
+            raise
+        except (OSError, ValueError):
+            logger.exception("Could not save sequence summary")
+            return PersistenceResult(notices=("PASS の記録を保存できませんでした。保存先・空き容量を確認してください。",))

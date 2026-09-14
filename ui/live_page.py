@@ -18,6 +18,7 @@ ACTIVE_STATES = {"STARTING", "LIVE", "DEVICE_LOST", "RECONNECTING"}
 class LivePage(QWidget):
     replay_requested = Signal()
     dump_requested = Signal()
+    sequence_requested = Signal()
     start_requested = Signal(object)
     stop_requested = Signal()
     refresh_requested = Signal()
@@ -87,8 +88,10 @@ class LivePage(QWidget):
         snapshot_row = QHBoxLayout()
         self.replay_button = QPushButton("直近音声を Replay へ")
         self.dump_button = QPushButton("直近音声を WAV 保存")
+        self.sequence_button = QPushButton("直近音声の順序を解析")
         snapshot_row.addWidget(self.replay_button)
         snapshot_row.addWidget(self.dump_button)
+        snapshot_row.addWidget(self.sequence_button)
         snapshot_row.addStretch()
         grid.addLayout(snapshot_row, 5, 0, 1, 3)
         layout.addWidget(audio_group)
@@ -120,7 +123,7 @@ class LivePage(QWidget):
         bottom.addWidget(self.quality_label)
         meter_layout.addLayout(bottom)
         layout.addWidget(meter_group)
-        note = QLabel("音声取得の動作を確認できます。オラクル認識は準備中です。")
+        note = QLabel("直近音声を Replay へ送るか、保持音声の順序を解析できます。")
         note.setObjectName("subtitle")
         note.setWordWrap(True)
         layout.addWidget(note)
@@ -133,6 +136,7 @@ class LivePage(QWidget):
         self.refresh_button.clicked.connect(self.refresh_requested)
         self.replay_button.clicked.connect(self.replay_requested)
         self.dump_button.clicked.connect(self.dump_requested)
+        self.sequence_button.clicked.connect(self.sequence_requested)
         self._update_controls()
 
     def set_buffer_available(self, available: bool) -> None:
@@ -219,6 +223,7 @@ class LivePage(QWidget):
         snapshot_enabled = self._buffer_available and not self._operation_busy
         self.replay_button.setEnabled(snapshot_enabled)
         self.dump_button.setEnabled(snapshot_enabled)
+        self.sequence_button.setEnabled(snapshot_enabled)
 
     def _update_message(self) -> None:
         self.message_label.setText(self._selection_problem or self._status_message)
