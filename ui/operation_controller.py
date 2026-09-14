@@ -13,6 +13,7 @@ from audio.operations import OperationCancelled, check_cancel
 from audio.sources import AudioSource
 from audio.waveio import write_wav
 from replay.analyzer import AnalysisResult, Analyzer
+from detector.classifier import ClassificationResult, OracleClassifier
 
 logger = logging.getLogger("oracle_assistant.replay")
 
@@ -33,6 +34,7 @@ class OperationResult:
     path: Path | None = None
     error: str = ""
     cancelled: bool = False
+    classification: ClassificationResult | None = None
 
 
 class OperationController(QObject):
@@ -41,10 +43,11 @@ class OperationController(QObject):
 
     def __init__(
         self, sample_rate: int = 48000, parent: QObject | None = None,
-        analyzer: Analyzer | None = None,
+        analyzer: Analyzer | None = None, classifier: OracleClassifier | None = None,
     ) -> None:
         super().__init__(parent)
         self.analyzer = analyzer or Analyzer(sample_rate)
+        self.classifier = classifier
         self._queue: Queue[OperationTask] = Queue()
         self._closing = Event()
         self._thread: Thread | None = None
@@ -100,7 +103,13 @@ class OperationController(QObject):
                 check_cancel(self._closing)
                 if task.kind in ("wave", "live"):
                     analysis = self.analyzer.analyze(task.source, self._closing)
-                    event = OperationResult(task.kind, analysis=analysis)
+                    classification = (self.classifier.classify_preprocessed(analysis.processed, self._closing)
+                                      if self.classifier is not None else None)
+                    event = OperationResult(task.kind, analysis=analysis, classification=classification)
+                    if classification is not None:
+                        logger.info("Waveform ranking: status=%s oracle=%s best=%s second=%s score=%s samples=%s",
+                                    classification.status, classification.oracle, classification.best_score,
+                                    classification.second_candidate, classification.second_score, classification.sample_count)
                     logger.info(
                         "Audio analyzed: %s Hz / %s ch -> %s Hz / 1 ch, %s frames, sha256=%s",
                         analysis.original.sample_rate, analysis.original.channels,

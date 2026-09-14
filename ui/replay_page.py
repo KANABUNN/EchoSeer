@@ -1,4 +1,4 @@
-"""Minimal Phase 2 Replay: deterministic audio conversion and explicit export."""
+"""Replay: shared audio conversion, Oracle waveform ranking and explicit export."""
 
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import (
@@ -8,6 +8,7 @@ from PySide6.QtWidgets import (
 
 from audio.sources import AudioSource, ClipSource, WaveFileSource
 from replay.analyzer import AnalysisResult
+from ui.recognition_widget import RecognitionWidget
 
 
 class ReplayPage(QWidget):
@@ -15,7 +16,7 @@ class ReplayPage(QWidget):
     analyze_requested = Signal()
     save_requested = Signal()
 
-    def __init__(self, parent: QWidget | None = None) -> None:
+    def __init__(self, parent: QWidget | None = None, labels: dict[str, str] | None = None) -> None:
         super().__init__(parent)
         self.setMinimumHeight(540)
         self.source: AudioSource | None = None
@@ -39,13 +40,16 @@ class ReplayPage(QWidget):
         row.addWidget(self.open_button)
         row.addWidget(self.analyze_button)
         source_layout.addLayout(row)
-        self.message_label = QLabel("WAV の読み込みと音声形式の変換を確認できます。")
+        self.message_label = QLabel("1 つの Oracle を含む WAV、または Live の直近音声を比較できます。")
+        self.message_label.setTextFormat(Qt.TextFormat.PlainText)
         self.message_label.setWordWrap(True)
         self.message_label.setObjectName("audioMessage")
         source_layout.addWidget(self.message_label)
         layout.addWidget(source_group)
 
-        summary = QGroupBox("解析結果")
+        self.recognition = RecognitionWidget(labels)
+        layout.addWidget(self.recognition)
+        summary = QGroupBox("音声形式")
         grid = QGridLayout(summary)
         grid.setHorizontalSpacing(20)
         grid.setVerticalSpacing(12)
@@ -78,7 +82,7 @@ class ReplayPage(QWidget):
         export_layout.addWidget(self.encoding_combo, 1)
         export_layout.addWidget(self.save_button)
         layout.addWidget(export_group)
-        note = QLabel("モノラル化 → DC 成分除去 → レート変換 → 音量正規化。オラクル判定は後続 Phase で追加します。")
+        note = QLabel("Phase 4 は波形相関の暫定候補です。スペクトル比較と信頼度判定は後続 Phase で追加します。")
         note.setObjectName("subtitle")
         note.setWordWrap(True)
         layout.addWidget(note)
@@ -93,18 +97,20 @@ class ReplayPage(QWidget):
         self.path_label.setText(str(path))
         self.path_label.setToolTip(str(path))
         self._clear_result()
-        self.message_label.setText("Analyze で音声を読み込み、形式を変換します。")
+        self.message_label.setText("Analyze で音声を読み込み、登録サンプルと比較します。")
         self._update_controls()
 
     def _clear_result(self) -> None:
         self.result = None
         self._checksum = None
+        self.recognition.clear()
         self.notice_label.clear()
         for labels in self.values.values():
             for label in labels:
                 label.setText("—")
 
     def begin_analysis(self) -> None:
+        self.recognition.clear()
         # Keep only the checksum for comparison; a failed read must not export old audio.
         self.result = None
         self.notice_label.clear()
@@ -114,6 +120,7 @@ class ReplayPage(QWidget):
         self._update_controls()
 
     def set_result(self, result: AnalysisResult, live: bool = False) -> None:
+        self.recognition.clear()
         if live:
             self.source = ClipSource(result.original)
             self.path_label.setText("Live の直近音声（解析開始時のコピー）")

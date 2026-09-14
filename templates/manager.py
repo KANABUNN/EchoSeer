@@ -7,6 +7,7 @@ import logging
 import os
 from pathlib import Path
 import shutil
+import time
 from threading import Event, RLock
 from uuid import uuid4
 
@@ -66,6 +67,26 @@ class TemplateManager:
             if part == self.root:
                 break
         return path
+
+    def _move_directory(self, source: Path, destination: Path, cancel: Event | None = None) -> None:
+        # Windows scanners can briefly hold a just-written directory.
+        delays = (0.02, 0.04, 0.08, 0.16)
+        for attempt in range(len(delays) + 1):
+            check_cancel(cancel)
+            self._safe(source)
+            self._safe(destination)
+            if destination.exists():
+                raise FileExistsError("同じ保存先がすでに存在します。")
+            try:
+                source.rename(destination)
+                return
+            except OSError as error:
+                if getattr(error, "winerror", None) not in (5, 32, 33) or attempt == len(delays):
+                    raise
+                if cancel is None:
+                    time.sleep(delays[attempt])
+                else:
+                    cancel.wait(delays[attempt])
 
     def _directory(self, oracle: OracleId | str, sample_id: str) -> Path:
         key = OracleId(oracle)
@@ -161,7 +182,7 @@ class TemplateManager:
                     stream.flush()
                     os.fsync(stream.fileno())
                 check_cancel(cancel)
-                pending.rename(final)
+                self._move_directory(pending, final, cancel)
             finally:
                 if pending.exists():
                     shutil.rmtree(self._safe(pending))
@@ -169,10 +190,17 @@ class TemplateManager:
             return TemplateSample(metadata, final)
 
     def load_audio(self, oracle: OracleId | str, sample_id: str,
-                   cancel: Event | None = None) -> AudioClip:
+                   cancel: Event | None = None, *, original: bool = False) -> AudioClip:
         with self._lock:
             sample = self._load(self._directory(oracle, sample_id), OracleId(oracle), sample_id, cancel)
-            return read_wav(sample.path, cancel)
+            clip = read_wav(sample.directory / "original.wav" if original else sample.path, cancel)
+            metadata = sample.metadata
+            expected = ((metadata.original_sample_rate, metadata.original_channels,
+                         metadata.original_frames, metadata.original_checksum) if original
+                        else (metadata.sample_rate, 1, metadata.frames, metadata.checksum))
+            if (clip.sample_rate, clip.channels, clip.frame_count) != expected[:3] or audio_checksum(clip) != expected[3]:
+                raise AudioDataError("読み込み中に保存音声が変更されました。再読込してください。")
+            return clip
 
     def delete(self, oracle: OracleId | str, sample_id: str,
                cancel: Event | None = None) -> DeletedSample:
@@ -184,7 +212,7 @@ class TemplateManager:
             trash = self._safe(self.root / ".trash" / trash_name)
             trash.parent.mkdir(parents=True, exist_ok=True)
             check_cancel(cancel)
-            directory.rename(trash)
+            self._move_directory(directory, trash, cancel)
             logger.info("Template moved to trash: %s", trash_name)
             return DeletedSample(key, sample_id, trash_name)
 
@@ -200,5 +228,5 @@ class TemplateManager:
                 raise AudioDataError("同じ ID のサンプルが存在するため復元できません。")
             final.parent.mkdir(parents=True, exist_ok=True)
             check_cancel(cancel)
-            trash.rename(final)
+            self._move_directory(trash, final, cancel)
             return TemplateSample(sample.metadata, final)

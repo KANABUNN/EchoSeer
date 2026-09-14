@@ -1,1 +1,1 @@
-"""Event detection and classification; reserved for Phase 4 onward."""
+"""Qt-independent Oracle waveform classification; confidence and event detection follow later."""

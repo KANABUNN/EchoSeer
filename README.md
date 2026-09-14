@@ -3,11 +3,12 @@
 Vault of Glass のゲーム音声からオラクルを識別し、順序と信頼度を表示する
 Windows アプリケーションを、指示書の Phase 順に開発しています。
 
-**Phase 3（テンプレート管理）まで実装済みです。**
+**Phase 4（基本 Oracle 認識）まで実装済みです。**
 WASAPI Loopback / 通常録音入力の選択、Start / Stop、リアルタイム音量表示、
 リングバッファ、WAV 読み書き、共通前処理、簡易 Replay、設定保存・復旧、診断ログが動作します。
 Calibration で Oracle ごとの複数サンプル登録・録音・Import・Listen・削除・復元ができます。
-オラクル認識、Calibration の詳細調整、Overlay、配布 EXE は後続 Phase で実装します。
+Replay と Live の直近区間で、波形相関による Oracle 候補・スコア・全7種類の順位を表示します。
+スペクトル解析、信頼度、順序処理、Calibration の詳細調整、Overlay、配布 EXE は後続 Phase で実装します。
 
 ゲームへの操作送信、メモリ読み取り、DLL 注入、ゲームファイルへのアクセス、
 自動入力、Bungie API、クラウド認識、テレメトリーは実装しません。
@@ -141,6 +142,19 @@ IEEE float 32 / 64 bit、および対応 PCM / float の WAVE_FORMAT_EXTENSIBLE 
 Oracle ごとの複数サンプルはアプリの再起動後も残ります。
 詳しい操作と保存形式は [サンプル登録手順](docs/calibration.md) を参照してください。
 
+## 基本 Oracle 認識（Phase 4）
+
+1. Calibration で7種類の Oracle サンプルを登録します。
+2. Replay で1つの Oracle を含む20 ms〜10秒の WAV を開き、Analyze を押します。
+3. 第1・第2候補とスコア、差、7種類の順位を確認します。
+4. Live の「直近音声を Replay へ」でも同じ比較を行います。
+
+提供された A.wav〜G.wav は、対応画像に従って通常の保存先へ登録済みです。
+波形スコアは類似度であり、正解の確率ではありません。
+無音・未登録・同点などでは確定しません。順序処理と連続イベント検出は後続 Phase です。
+詳しい操作・対応表・最高値または上位N件平均・帯域設定は
+[Oracle 認識の操作説明](docs/recognition.md) を参照してください。
+
 ## 設定・ログ保存場所
 
 ```text
@@ -160,7 +174,8 @@ Oracle ごとの複数サンプルはアプリの再起動後も残ります。
 - 破損・不正な設定は `config.corrupt-日時-識別子.json` へ退避して初期値で復旧します。
 - 退避できなければ原本を保持し、読み込み・保存のエラーを GUI に表示します。
 - 診断ログは 5 MiB × 最大 4 ファイルです。
-- 後続 Phase 用の認識・録音設定は現在の音声取得に影響しません。
+- 波形比較には template_aggregation / top_n / bandpass の認識設定を使用します。
+- confidence 閾値・スペクトル重み・順序設定は後続 Phase 用で、現在の候補を確定するためには使用しません。
 
 設定例は [config.example.json](docs/config.example.json) を参照してください。
 認識閾値やタイミングは調整前の仮値です。
@@ -174,13 +189,13 @@ config/          初期値、schema、設定保存・復旧
 logging_ext/     診断ログ、JSONL イベントログ基盤
 audio/           取得、リングバッファ、WAV 入出力、音声ソース、レート変換
 ui/              Live / Replay / Calibration、音量表示、Qt Signal/Slot、処理ワーカー
-dsp/             mono・DC 除去・正規化、特徴量は後続 Phase
+dsp/             mono・DC 除去・正規化・帯域処理・正規化相関
 templates/       複数テンプレート管理（Phase 3）
-detector/        検出・分類・信頼度（Phase 4 以降）
+detector/        Oracle 波形分類・スコア順位、イベント検出と信頼度は後続 Phase
 encounter/       固定 OracleId、遭遇・Pass 判定は Phase 7 以降
 replay/          Live / WAV 共通 Analyzer、評価は後続 Phase
 tests/           Unit / 音声ワーカー / GUI テスト、音声・Dataset 用フォルダー
-scripts/         セットアップ・検証
+scripts/         セットアップ・検証・対応表によるサンプル登録
 build/           配布ビルド用フォルダー
 docs/            原指示書、設定例、開発・受け入れ記録
 ```
@@ -204,8 +219,9 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\verify.ps1
 .\.venv\Scripts\python.exe -m pip check
 ```
 
-Python 3.14.6 で **218 passed**、依存関係の確認も成功しています。
+Python 3.14.6 で **299 passed**、依存関係の確認も成功しています。
 自動テストは実デバイス・ゲーム・VoiceMeeter の起動を必要としません。
+うち14件は任意のローカル samples/A.wav〜G.wav を使い、音声がない環境では skip します。
 GUI は offscreen、音声は実スレッドで動くデバイス代替を用いて確認します。
 
 実 Windows ウィンドウでも、既定再生先の loopback 音量表示、
@@ -218,7 +234,9 @@ Phase 2 では実 loopback を WAV 保存し、Live と Replay の解析列が�
 Phase 3 では 7 種 × 2 件の WAV を登録し、native 48000 Hz / 2 ch の 0.5 秒を録音しました。
 Listen・停止・削除・復元、再起動後の 15 件保持、再生中の終了と全ワーカー解放も確認しています。
 実機確認の詳細と制限は [受け入れ確認](docs/acceptance.md) に記載しています。
-VoiceMeeter B1 へのゲーム音経路、物理的な切断・再接続、実 Oracle 認識は未検証です。
+Phase 4 では提供 WAV の全区間と、登録・比較を重ならない前後の区間に分けた条件で各7/7を確認しました。
+実 Windows 画面でも順位表・第1/第2候補、再起動後の登録7件、終了時の全ワーカー解放を確認しています。
+別録音・雑音下・実戦の認識率、VoiceMeeter B1 へのゲーム音経路、物理的な切断・再接続は未検証です。
 
 ## Troubleshooting
 
@@ -227,7 +245,7 @@ VoiceMeeter B1 へのゲーム音経路、物理的な切断・再接続、実 O
 - **設定の警告**: 保存先のアクセス権・空き容量・退避ファイルを確認してください。
 - **LIVE でも無音**: ゲームの出力先、VoiceMeeter のバス、ミュートを確認してください。
 - **デバイスを開始できない**: 再検索し、Windows / VoiceMeeter の音声設定を確認してください。
-- **オラクルを認識しない**: Phase 3 は音声基盤とサンプル管理までの実装です。
+- **Oracle 候補が出ない**: Calibration の登録数、Replay の区間長・無音・警告を確認してください。連続検出は後続 Phase です。
 - **WAV を解析できない**: 対応形式・サイズを確認し、元の音声から再出力してください。
 - **保存できない**: 保存先のアクセス権・空き容量を確認してください。
 - **起動しない / 入力エラー**: --debug の出力と logs/application.log を確認してください。
@@ -247,6 +265,9 @@ VoiceMeeter B1 へのゲーム音経路、物理的な切断・再接続、実 O
 [PyAudio API](https://people.csail.mit.edu/hubert/pyaudio/docs/) の仕様を確認しました。
 [SciPy WAV](https://docs.scipy.org/doc/scipy/reference/generated/scipy.io.wavfile.read.html) /
 [polyphase resampling](https://docs.scipy.org/doc/scipy/reference/generated/scipy.signal.resample_poly.html)。
+[correlate](https://docs.scipy.org/doc/scipy/reference/generated/scipy.signal.correlate.html) /
+[Butterworth](https://docs.scipy.org/doc/scipy/reference/generated/scipy.signal.butter.html) /
+[SOS filtering](https://docs.scipy.org/doc/scipy/reference/generated/scipy.signal.sosfiltfilt.html)。
 [Prophet](https://github.com/PyrexPi/prophet) は参照先として確認済みで、
 ソース・テンプレート・アセットは転載していません。
 既存 [LICENSE.txt](LICENSE.txt) を適用します。

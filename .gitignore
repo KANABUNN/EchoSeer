@@ -11,3 +11,4 @@ htmlcov/
 config.json
 config.corrupt-*.json
 logs/
+/samples/

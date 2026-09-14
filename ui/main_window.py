@@ -16,6 +16,8 @@ from audio.service import CaptureStatus
 from audio.sources import LiveSource
 from audio.recorder import RecordingEvent
 from encounter.vog_oracles import OracleId
+from detector.classifier import OracleClassifier
+from dsp.bandpass import BandpassSettings
 from config.manager import ConfigManager
 from config.schema import AppConfig, ConfigValidationError
 from ui.audio_controller import AudioController
@@ -69,7 +71,7 @@ class MainWindow(QMainWindow):
         self.live_scroll.setFrameShape(QScrollArea.Shape.NoFrame)
         self.live_scroll.setWidget(self.live_page)
         self.tabs.addTab(self.live_scroll, "Live")
-        self.replay_page = ReplayPage()
+        self.replay_page = ReplayPage(labels=self.settings.oracle_labels)
         self.replay_scroll = QScrollArea()
         self.replay_scroll.setWidgetResizable(True)
         self.replay_scroll.setFrameShape(QScrollArea.Shape.NoFrame)
@@ -110,6 +112,14 @@ class MainWindow(QMainWindow):
         self.templates = templates or TemplateController(
             data_root / "templates", self.settings.audio.internal_sample_rate, parent=self,
         )
+        if self.operations.classifier is None:
+            recognition = self.settings.recognition
+            self.operations.classifier = OracleClassifier(
+                self.templates.manager, self.settings.audio.internal_sample_rate,
+                recognition.template_aggregation, recognition.top_n,
+                BandpassSettings(recognition.bandpass_low_hz, recognition.bandpass_high_hz)
+                if recognition.bandpass_enabled else None,
+            )
         self._record_target = None
         self._last_deleted = None
         self.templates.finished.connect(self._on_template_result, Qt.ConnectionType.QueuedConnection)
@@ -251,6 +261,7 @@ class MainWindow(QMainWindow):
             self.replay_page.show_error("処理を中止しました。")
         elif event.analysis is not None:
             self.replay_page.set_result(event.analysis, live=event.kind == "live")
+            self.replay_page.recognition.set_result(event.classification)
         elif event.path is not None:
             message = f"保存しました：{event.path}"
             if event.kind == "dump":
