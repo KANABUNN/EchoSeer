@@ -116,7 +116,8 @@ class RecognitionRecorder:
                 notices.append("認識ログを保存できませんでした。保存先・空き容量を確認してください。")
         return PersistenceResult(event_path, audio_path, tuple(notices))
 
-    def record_sequence(self, snapshot, checksum: str, cancel: Event | None = None) -> PersistenceResult:
+    def record_sequence(self, snapshot, checksum: str, cancel: Event | None = None,
+                        source: dict | None = None) -> PersistenceResult:
         check_cancel(cancel)
         if not self.settings.event_logs:
             return PersistenceResult()
@@ -145,6 +146,8 @@ class RecognitionRecorder:
             "transitions": [{"from": t.before.value, "to": t.after.value,
                              "event_time": t.timestamp, "reason": t.reason} for t in snapshot.transitions],
         }
+        if source is not None:
+            payload["source"] = source
         try:
             check_cancel(cancel)
             self.events.write(payload)

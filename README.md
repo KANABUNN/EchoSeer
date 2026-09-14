@@ -3,7 +3,7 @@
 Vault of Glass のゲーム音声からオラクルを識別し、順序と信頼度を表示する
 Windows アプリケーションを、指示書の Phase 順に開発しています。
 
-**Phase 9（2回照合・VoGルール補正）まで実装済みです。**
+**Phase 12（連続Live認識・Oracle Map・Overlay・Calibration）まで実装済みです。**
 WASAPI Loopback / 通常録音入力の選択、Start / Stop、リアルタイム音量表示、
 リングバッファ、WAV 読み書き、共通前処理、簡易 Replay、設定保存・復旧、診断ログが動作します。
 Calibration で Oracle ごとの複数サンプル登録・録音・Import・Listen・削除・復元ができます。
@@ -12,7 +12,11 @@ HIGH / MEDIUM / LOW / REJECTED と unknown、Live の重複抑制、認識ログ
 Replay WAV と Live の保持音声からイベントを切り出し、Round 1〜5 の3〜7個を PASS1 / PASS2 に独立保存します。
 完全一致のCONFIRMED、不一致位置、INFERRED / CHECK、上位候補による重複なしの順序再構成に対応します。
 詳しくは [信頼度](docs/confidence.md) / [順序解析](docs/sequence.md) / [2回照合と推定](docs/verification.md) を確認してください。
-Live の全ラウンド追跡、Calibration の詳細調整、Overlay、配布 EXE は後続 Phase で実装します。
+Liveは取得中に両PASSを照合し、Round・個数・確定順／推定順と番号付きOracle Mapを表示します。
+枠なし・最前面・クリック透過のOverlayは順序／マップを切り替え、位置・不透明度・倍率を保存します。
+CalibrationのQuality Checkで保存した元音声を再確認し、7種類の登録状況と表示名をGUIから管理できます。
+手順は [Live / Overlay](docs/live-overlay.md) / [Calibration](docs/calibration.md) を確認してください。
+後続PhaseはReplay / Debugの詳細、実戦評価、Hotkey・UX、配布EXEです。
 
 ゲームへの操作送信、メモリ読み取り、DLL 注入、ゲームファイルへのアクセス、
 自動入力、Bungie API、クラウド認識、テレメトリーは実装しません。
@@ -53,7 +57,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\setup.ps1
 
 1. Live の入力方式で「再生デバイス（WASAPI Loopback）」を選びます。
 2. ゲームや確認音の出力先と同じデバイスを選びます。初回は Windows の既定再生先を選択します。
-3. 表示された Sample Rate / Channels を確認し、Start を押します。
+3. デバイス欄にマウスを合わせてレートとチャンネル数を確認し、Start を押します。
 4. LIVE になり、音声に応じて RMS / Peak と音量メーターが変化することを確認します。
 5. Stop で停止します。停止後にデバイス変更・再検索ができます。
 
@@ -124,7 +128,7 @@ peak が 1e-6 以下の音声はゼロとして扱い、微小ノイズを増幅
 Live / Replay のどちらも一つの完全な入力区間に前処理を適用します。
 callback の境界ごとに変換・正規化することはありません。
 「順序を解析」では native 音声から発音区間を切り出し、各区間に同じ前処理を適用します。
-取得しながら全ラウンドを追跡する処理は後続 Phase の作業です。
+Start中の連続認識は専用Live workerで行い、未読音声だけを処理してRoundを追跡します。
 
 読込対応は little-endian RIFF / WAVE の PCM 8 / 16 / 24 / 32 bit、
 IEEE float 32 / 64 bit、および対応 PCM / float の WAVE_FORMAT_EXTENSIBLE です。
@@ -136,11 +140,11 @@ IEEE float 32 / 64 bit、および対応 PCM / float の WAVE_FORMAT_EXTENSIBLE 
 再解析に失敗した場合は古い結果の保存を無効にします。
 保存は一時ファイルを書き終えてから置換し、途中の失敗・キャンセルでは既存ファイルを保護します。
 
-## Calibration / テンプレート管理（Phase 3）
+## Calibration / テンプレート管理（Phase 3・12）
 
 1. Calibration で Oracle を選び、Import WAV で複数ファイルを登録します。
 2. 録音する場合は Live を Start し、Calibration で時間を選んで Record Sample を押します。
-3. 一覧で品質情報を確認し、Listen・再生停止・Delete・削除を戻すを使えます。
+3. Quality Checkで保存した元音声の品質を再確認し、Listen・再生停止・Delete・削除を戻すを使えます。
 
 開始後の音声を指定時間だけ取得し、登録は共通前処理済みの mono 音声と元の native 音声を保存します。
 無音は登録を拒否し、短さ・長さ・小さな RMS・クリッピングを警告します。
@@ -216,8 +220,8 @@ logging_ext/     診断ログ、JSONL イベントログ基盤
 audio/           取得、リングバッファ、WAV 入出力、音声ソース、レート変換
 ui/              Live / Replay / Calibration、音量表示、Qt Signal/Slot、処理ワーカー
 dsp/             mono・DC 除去・正規化・帯域処理・正規化相関・STFT特徴
-templates/       複数テンプレート管理（Phase 3）
-detector/        Oracle 波形/スペクトル順位・複合スコア・信頼度判定、有限音声のイベント切り出し
+templates/       複数テンプレート管理・native品質再確認
+detector/        Oracle 波形/スペクトル順位・複合スコア・信頼度判定、有限／連続音声のイベント切り出し
 encounter/       OracleId、期待個数・Sequence FSM・独立PASS・2回照合・候補再構成
 replay/          Live / WAV 共通 Analyzer、1ラウンドの順序解析
 tests/           Unit / 音声ワーカー / GUI テスト、音声・Dataset 用フォルダー
@@ -245,9 +249,9 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\verify.ps1
 .\.venv\Scripts\python.exe -m pip check
 ```
 
-Python 3.14.6 で **541 passed**、依存関係の確認も成功しています。
+Python 3.14.6 で **606 passed**、依存関係の確認も成功しています。
 自動テストは実デバイス・ゲーム・VoiceMeeter の起動を必要としません。
-うち18件は任意のローカル samples/A.wav〜G.wav を使い、音声がない環境では skip します。
+うち19件は任意のローカル samples/A.wav〜G.wav を使い、音声がない環境では skip します。
 GUI は offscreen、音声は実スレッドで動くデバイス代替を用いて確認します。
 
 実 Windows ウィンドウでも、既定再生先の loopback 音量表示、
@@ -269,6 +273,9 @@ Phase 6 は曖昧な候補を unknown とし、Live の重複除外と Replay �
 Phase 7 は個別の提供録音を2回提示に組んだ全5ラウンドと、欠落・不一致・ノイズ・途中切れ・間隔不足の計10ケースを確認しました。
 実 Windows 画面で7個の表示、有限Live音声とReplayコピーの一致、終了時の全ワーカー解放も確認しました。
 Phase 8–9 は完全一致の確定、不一致位置の特定、1箇所のLOW・重複の推定を確認しました。
+Phase 10–12は連続LiveとReplayの7ケース、Windowsで提供7音声のGUI登録・品質確認・Live確定／不一致を確認しました。
+Windowsのテスト用borderless画面でクリック透過・非アクティブ表示・位置調整、100% / 125% / 150%表示、全4worker解放を確認しました。
+Destiny 2実行中のOverlay、物理的な複数モニター変更、長時間実戦の性能は未確認です。
 提供音声に分類誤りを注入した8ケースは、推定・同点・弱い根拠を確定表示にしません。
 別録音・会話や効果音を含む実戦の認識率、VoiceMeeter B1 へのゲーム音経路、物理的な切断・再接続は未検証です。
 

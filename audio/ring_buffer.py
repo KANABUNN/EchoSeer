@@ -1,5 +1,6 @@
 """Bounded, thread-safe native-format audio storage, measured in frames."""
 
+from dataclasses import dataclass
 import math
 import time
 from uuid import uuid4
@@ -8,6 +9,17 @@ from threading import Event, Lock
 
 import numpy as np
 from numpy.typing import NDArray
+
+
+@dataclass(frozen=True, slots=True)
+class BufferRead:
+    samples: NDArray[np.float32]
+    stream_id: str
+    timestamp: float
+    start_frame: int
+    end_frame: int
+    latest_frame: int
+    overrun: bool
 
 
 class RingBuffer:
@@ -81,6 +93,30 @@ class RingBuffer:
                 output[first:] = self._data[:count - first]
             return output, self._stream_id, self._last_write_time, self._total_frames - count, self._total_frames
 
+
+    def read_since(self, frame: int, stream_id: str | None = None,
+                   max_frames: int | None = None) -> BufferRead:
+        """Copy earliest unread frames atomically; report wrap/reset instead of joining gaps."""
+        if type(frame) is not int or frame < 0:
+            raise ValueError("Requested frame must be nonnegative")
+        if max_frames is not None and (type(max_frames) is not int or max_frames <= 0):
+            raise ValueError("Read limit must be positive")
+        with self._lock:
+            oldest = self._total_frames - self._size
+            changed = stream_id is not None and stream_id != self._stream_id
+            overrun = changed or frame < oldest or frame > self._total_frames
+            start_frame = oldest if overrun else frame
+            count = self._total_frames - start_frame
+            if max_frames is not None:
+                count = min(count, max_frames)
+            position = (self._position - (self._total_frames - start_frame)) % self.capacity_frames
+            output = np.empty((count, self.channels), dtype=np.float32)
+            first = min(count, self.capacity_frames - position)
+            output[:first] = self._data[position:position + first]
+            if first < count:
+                output[first:] = self._data[:count - first]
+            return BufferRead(output, self._stream_id, self._last_write_time, start_frame,
+                              start_frame + count, self._total_frames, overrun)
 
     def dump(
         self, path: Path | str, frames: int | None = None, encoding: str = "float32",

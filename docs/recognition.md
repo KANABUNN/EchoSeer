@@ -150,4 +150,4 @@ STFT は32フレームずつ計算してキャンセルを確認し、
 初期閾値では重ならない前後区間の7件をすべて unknown にします。
 有限音声のイベント切り出し・PASS分離は Phase 7 に追加しました。
 2回照合・再構成は Phase 8–9 に追加しました。[verification.md](verification.md) を参照してください。
-取得を続けながらのラウンド追跡は後続 Phase です。
+取得を続けながらのラウンド追跡はPhase 10に追加しました。[Live / Overlay](live-overlay.md)を参照してください。

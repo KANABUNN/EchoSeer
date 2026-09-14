@@ -18,7 +18,7 @@ from audio.waveio import read_wav, write_wav
 from encounter.vog_oracles import OracleId
 from replay.analyzer import Analyzer
 from templates.metadata import ID_PATTERN, SampleMetadata
-from templates.quality import quality_notices, validate_length
+from templates.quality import QualityReport, quality_notices, validate_length
 
 logger = logging.getLogger("oracle_assistant.templates")
 
@@ -201,6 +201,17 @@ class TemplateManager:
             if (clip.sample_rate, clip.channels, clip.frame_count) != expected[:3] or audio_checksum(clip) != expected[3]:
                 raise AudioDataError("読み込み中に保存音声が変更されました。再読込してください。")
             return clip
+
+    def check_quality(self, oracle: OracleId | str, sample_id: str,
+                      cancel: Event | None = None) -> QualityReport:
+        """Re-read verified native audio and measure it without modifying saved samples."""
+        clip = self.load_audio(oracle, sample_id, cancel, original=True)
+        result = self.analyzer.analyze(ClipSource(clip), cancel)
+        notices = quality_notices(result)
+        level = result.original_level
+        return QualityReport(OracleId(oracle).value, sample_id, clip.sample_rate, clip.channels,
+                             clip.duration_seconds, level.peak, level.rms,
+                             level.clipping or level.peak >= .999, audio_checksum(clip), notices)
 
     def delete(self, oracle: OracleId | str, sample_id: str,
                cancel: Event | None = None) -> DeletedSample:

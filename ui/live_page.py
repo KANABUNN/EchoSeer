@@ -11,6 +11,7 @@ from audio.device_manager import DeviceCatalog, resolve_device
 from audio.level import AudioLevel
 from audio.service import CaptureStatus
 from config.schema import AudioSettings
+from ui.live_dashboard import LiveDashboard
 
 ACTIVE_STATES = {"STARTING", "LIVE", "DEVICE_LOST", "RECONNECTING"}
 
@@ -25,110 +26,102 @@ class LivePage(QWidget):
     selection_changed = Signal(object)
     backend_changed = Signal(str)
 
-    def __init__(self, settings: AudioSettings, parent: QWidget | None = None) -> None:
+    def __init__(self, settings: AudioSettings, parent: QWidget | None = None,
+                 labels=None, positions=None) -> None:
         super().__init__(parent)
         self.setMinimumHeight(600)
+        self.setStyleSheet("""
+            QGroupBox { padding: 5px; margin-top: 10px; }
+            QComboBox { padding: 4px; }
+            QPushButton { padding: 4px 10px; }
+            QLabel#levelValue { font-size: 14px; }
+            QLabel#captureStatus { padding: 3px 6px; }
+        """)
         self.settings = settings
-        self._buffer_available = False
-        self._operation_busy = False
-        self._catalog: DeviceCatalog | None = None
+        self._buffer_available = self._operation_busy = False
+        self._catalog = None
         self._state = "STOPPED"
-        self._status_message = ""
-        self._selection_problem = ""
+        self._status_message = self._selection_problem = ""
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(16, 16, 16, 16)
-        layout.setSpacing(18)
-
+        layout.setContentsMargins(10, 10, 10, 10)
+        layout.setSpacing(8)
         audio_group = QGroupBox("音声入力")
         grid = QGridLayout(audio_group)
-        grid.setHorizontalSpacing(16)
-        grid.setVerticalSpacing(12)
+        grid.setHorizontalSpacing(8)
+        grid.setVerticalSpacing(5)
         self.backend_combo = QComboBox()
         self.backend_combo.setAccessibleName("音声の入力方式")
         self.backend_combo.addItem("再生デバイス（WASAPI Loopback）", "wasapi_loopback")
         self.backend_combo.addItem("録音デバイス（VoiceMeeter など）", "input_device")
-        self.backend_combo.setCurrentIndex(
-            self.backend_combo.findData(settings.backend)
-        )
+        self.backend_combo.setCurrentIndex(self.backend_combo.findData(settings.backend))
         self.device_combo = QComboBox()
         self.device_combo.setAccessibleName("取得する音声デバイス")
         self.device_combo.setPlaceholderText("音声デバイスを選択")
-        self.device_combo.setMinimumWidth(320)
+        self.device_combo.setMinimumWidth(280)
         self.device_combo.setSizeAdjustPolicy(QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon)
-        self.device_combo.setMinimumContentsLength(30)
+        self.device_combo.setMinimumContentsLength(25)
         self.refresh_button = QPushButton("再検索")
-        self.refresh_button.setToolTip("停止中に音声デバイス一覧を更新します")
-        grid.addWidget(QLabel("入力方式"), 0, 0)
-        grid.addWidget(self.backend_combo, 0, 1)
-        grid.addWidget(self.refresh_button, 0, 2)
-        grid.addWidget(QLabel("デバイス"), 1, 0)
-        grid.addWidget(self.device_combo, 1, 1, 1, 2)
         self.format_label = QLabel("デバイス未選択")
         self.format_label.setObjectName("deviceInfo")
         self.format_label.setWordWrap(True)
-        grid.addWidget(self.format_label, 2, 1, 1, 2)
-        self.start_button = QPushButton("Start")
+        self.format_label.hide()
+        self.start_button, self.stop_button = QPushButton("Start"), QPushButton("Stop")
         self.start_button.setObjectName("primaryButton")
-        self.start_button.setAccessibleName("音声取得を開始")
-        self.stop_button = QPushButton("Stop")
-        self.stop_button.setAccessibleName("音声取得を停止")
+        self.start_button.setAccessibleName("音声取得とOracle認識を開始")
+        self.stop_button.setAccessibleName("音声取得とOracle認識を停止")
         self.state_label = QLabel("STOPPED")
         self.state_label.setObjectName("captureStatus")
         self.state_label.setAccessibleName("音声取得の状態")
-        controls = QHBoxLayout()
-        controls.addWidget(self.start_button)
-        controls.addWidget(self.stop_button)
-        controls.addStretch()
-        controls.addWidget(self.state_label)
-        grid.addLayout(controls, 3, 0, 1, 3)
-        self.message_label = QLabel("")
-        self.message_label.setObjectName("audioMessage")
-        self.message_label.setWordWrap(True)
-        grid.addWidget(self.message_label, 4, 0, 1, 3)
-        snapshot_row = QHBoxLayout()
-        self.replay_button = QPushButton("直近音声を Replay へ")
-        self.dump_button = QPushButton("直近音声を WAV 保存")
-        self.sequence_button = QPushButton("直近音声の順序を解析")
-        snapshot_row.addWidget(self.replay_button)
-        snapshot_row.addWidget(self.dump_button)
-        snapshot_row.addWidget(self.sequence_button)
-        snapshot_row.addStretch()
-        grid.addLayout(snapshot_row, 5, 0, 1, 3)
-        layout.addWidget(audio_group)
-
-        meter_group = QGroupBox("Audio Level")
-        meter_layout = QVBoxLayout(meter_group)
-        meter_layout.setSpacing(12)
-        row = QHBoxLayout()
-        self.rms_label = QLabel("RMS  −∞ dBFS")
+        grid.addWidget(self.backend_combo, 0, 0, 1, 2)
+        grid.addWidget(self.refresh_button, 0, 2)
+        grid.addWidget(self.state_label, 0, 3)
+        grid.addWidget(self.device_combo, 1, 0, 1, 2)
+        grid.addWidget(self.start_button, 1, 2)
+        grid.addWidget(self.stop_button, 1, 3)
+        self.rms_label, self.peak_label = QLabel("RMS  −∞ dBFS"), QLabel("Peak  −∞ dBFS")
         self.rms_label.setObjectName("levelValue")
-        self.peak_label = QLabel("Peak  −∞ dBFS")
-        row.addWidget(self.rms_label)
-        row.addStretch()
-        row.addWidget(self.peak_label)
-        meter_layout.addLayout(row)
         self.level_meter = QProgressBar()
-        self.level_meter.setAccessibleName("音声の RMS 音量")
         self.level_meter.setRange(0, 800)
         self.level_meter.setValue(0)
         self.level_meter.setTextVisible(False)
-        self.level_meter.setMinimumHeight(26)
-        meter_layout.addWidget(self.level_meter)
+        self.level_meter.setFixedHeight(12)
+        self.level_meter.setAccessibleName("音声の RMS 音量")
+        meter = QHBoxLayout()
+        meter.addWidget(self.rms_label)
+        meter.addWidget(self.level_meter, 1)
+        meter.addWidget(self.peak_label)
+        grid.addLayout(meter, 2, 0, 1, 4)
         self.buffer_label = QLabel(f"バッファ  0.0 / {settings.buffer_duration:g} 秒")
         self.quality_label = QLabel("欠落 0 フレーム · オーバーフロー 0")
-        self.quality_label.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
-        bottom = QHBoxLayout()
-        bottom.addWidget(self.buffer_label)
-        bottom.addStretch()
-        bottom.addWidget(self.quality_label)
-        meter_layout.addLayout(bottom)
-        layout.addWidget(meter_group)
-        note = QLabel("直近音声を Replay へ送るか、保持音声の順序を解析できます。")
-        note.setObjectName("subtitle")
-        note.setWordWrap(True)
-        layout.addWidget(note)
+        self.quality_label.setAlignment(Qt.AlignmentFlag.AlignRight)
+        quality = QHBoxLayout()
+        quality.addWidget(self.buffer_label)
+        quality.addStretch()
+        quality.addWidget(self.quality_label)
+        grid.addLayout(quality, 3, 0, 1, 4)
+        self.message_label = QLabel()
+        self.message_label.setObjectName("audioMessage")
+        self.message_label.setTextFormat(Qt.TextFormat.PlainText)
+        self.message_label.setWordWrap(True)
+        self.message_label.hide()
+        grid.addWidget(self.message_label, 4, 0, 1, 4)
+        layout.addWidget(audio_group)
+        self.dashboard = LiveDashboard(labels, positions)
+        layout.addWidget(self.dashboard)
+        self.details_button = QPushButton("音声の保存・Replayを開く")
+        self.details_button.setCheckable(True)
+        layout.addWidget(self.details_button)
+        self.snapshot_widget = QWidget()
+        snapshot_row = QHBoxLayout(self.snapshot_widget)
+        self.replay_button = QPushButton("直近音声を Replay へ")
+        self.dump_button = QPushButton("直近音声を WAV 保存")
+        self.sequence_button = QPushButton("直近音声の順序を解析")
+        for widget in (self.replay_button, self.dump_button, self.sequence_button):
+            snapshot_row.addWidget(widget)
+        self.snapshot_widget.hide()
+        layout.addWidget(self.snapshot_widget)
+        self.details_button.toggled.connect(self.snapshot_widget.setVisible)
         layout.addStretch()
-
         self.backend_combo.currentIndexChanged.connect(self._backend_changed)
         self.device_combo.currentIndexChanged.connect(self._device_changed)
         self.start_button.clicked.connect(self._start)
@@ -226,7 +219,9 @@ class LivePage(QWidget):
         self.sequence_button.setEnabled(snapshot_enabled)
 
     def _update_message(self) -> None:
-        self.message_label.setText(self._selection_problem or self._status_message)
+        text = self._selection_problem or self._status_message
+        self.message_label.setText(text)
+        self.message_label.setVisible(bool(text))
 
     def set_status(self, status: CaptureStatus) -> None:
         self._state, self._status_message = status.state, status.message

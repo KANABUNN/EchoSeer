@@ -226,6 +226,14 @@ class SequenceEngine:
                 self._set(SequenceState.VERIFY, "AWAITING_VERIFICATION")
         return self.snapshot()
 
+    def invalidate(self, now: float, reason: str) -> SequenceSnapshot:
+        """An interrupted live source cannot retain a confirmed sequence."""
+        self._clock(now)
+        self._confirmed = False
+        self._verification = None
+        self._set(SequenceState.UNCERTAIN, reason)
+        return self.snapshot()
+
     def finish(self, now: float) -> SequenceSnapshot:
         self.advance(now, silent=True)
         if self.state in (SequenceState.ARMED, SequenceState.PASS_1, SequenceState.WAIT_PASS_2, SequenceState.PASS_2):

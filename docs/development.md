@@ -493,3 +493,37 @@ recognition.top_nのテンプレート集約とは分離する。実戦から校
 手順はdocs/verification.md、記録はdocs/acceptance.md。
 
 次はPhase 10 — Live GUI。
+
+## Phase 10–12 — Live GUI / Overlay / Calibration（2026-09-14）
+
+LiveControllerの専用workerとQt非依存LiveSequenceSessionを追加した。
+未読のnativeフレームだけを読み、RMS検出・共通前処理・分類・信頼度・FSM・2回照合を連続実行する。
+各音の保持は3秒 / 16 MiB、読み出しは最大0.5秒で制限する。長い連続音は1回のEVENT_LIMITとし、
+quiet releaseまで再分割しない。stream変更・バッファ欠落・入力切断は確定を消去してCHECKへ止める。
+Reset・Round選択・再開は操作時点から始め、古い取得区間を再投入しない。
+
+LiveにRound・両PASSの個数・元の候補・最低スコア・確定順／推定順・番号付きOracle Mapを集約した。
+CONFIRMED後のquiet lockoutは次Roundへ進む。不一致・推定・欠落はUNCERTAINに保持する。
+generationでキャンセルと古い更新を排除し、Qtの変更はQueued Signalでメインスレッドへ渡す。
+Replay・Calibrationの処理中は連続認識を一時停止し、取得自体は継続する。
+
+独立したOverlayは枠なし・最前面・透過背景・非アクティブ表示・クリック透過に対応する。
+Liveと同じ結果を使い、INFERREDを確定表示しない。位置調整は一時的に入力透過を解除する。
+順序／マップ・位置・不透明度・倍率・大きさ・字体を設定保存し、画面外や負の座標を補正する。
+Oracle Mapの正規化配置と表示名をGUIで変更して保存できる。
+
+Calibrationに7種類の件数・未登録位置・表示名・Quality Checkを追加した。
+保存WAVをchecksum検証して再読込し、元のnative音量・長さ・形式・警告を表示する。
+品質確認で原音・metadataを変更せず、Oracleの正誤を品質結果から確定しない。
+録音・Import・Listen・削除・復元は既存の保存保護と共通前処理を維持する。
+
+新規65件、全 **606 passed**（207.55秒）/ pip check成功。
+うち19件はローカル提供音声を使う任意テストで、音声がない環境ではskipする。
+提供A〜Gの連続Live / Replay比較7ケースと元WAVの保全を検証した。
+Windowsの実Qt画面で7音声のGUI登録・品質確認・Liveの確定と実音声不一致を確認した。
+テスト用borderless画面でクリック透過・位置調整・非アクティブ表示、100% / 125% / 150%表示と
+終了時の全4worker解放を確認した。高倍率・小さい主画面ではスクロールを使用する。
+Destiny 2実行中のOverlay、物理的な複数モニター変更、通し録音・長時間実戦の確認は残る。
+手順はdocs/live-overlay.md / docs/calibration.md、証跡と制限はdocs/acceptance.md。
+
+次はPhase 13 — Replay / Debug。

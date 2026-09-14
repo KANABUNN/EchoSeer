@@ -1,4 +1,5 @@
 """Recording/import quality notices before templates are committed."""
+from dataclasses import dataclass
 from audio.data import AudioClip, AudioDataError
 from replay.analyzer import AnalysisResult
 
@@ -23,3 +24,17 @@ def quality_notices(result: AnalysisResult) -> tuple[str, ...]:
     if result.original_level.rms < 0.0001:
         notices.append("入力音量が小さすぎる可能性があります。録音音量を確認してください。")
     return tuple(notices)
+
+
+@dataclass(frozen=True, slots=True)
+class QualityReport:
+    oracle: str
+    sample_id: str
+    sample_rate: int
+    channels: int
+    duration_seconds: float
+    peak: float
+    rms: float
+    clipping: bool
+    checksum: str
+    notices: tuple[str, ...]

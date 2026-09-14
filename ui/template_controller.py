@@ -11,6 +11,7 @@ from audio.operations import OperationCancelled, check_cancel
 from audio.playback import AudioPlayer
 from encounter.vog_oracles import OracleId
 from templates.manager import DeletedSample, TemplateCatalog, TemplateManager
+from templates.quality import QualityReport
 
 logger = logging.getLogger("oracle_assistant.templates")
 
@@ -33,6 +34,7 @@ class TemplateResult:
     selected_id: str = ""
     deleted: DeletedSample | None = None
     message: str = ""
+    quality: QualityReport | None = None
 
 
 class TemplateController(QObject):
@@ -87,7 +89,7 @@ class TemplateController(QObject):
 
     def _run_task(self, task: TemplateTask) -> TemplateResult:
         check_cancel(self._closing)
-        message, selected, deleted = "", task.sample_id, None
+        message, selected, deleted, quality = "", task.sample_id, None, None
         if task.kind == "import":
             successes, errors = [], []
             for path in task.paths:
@@ -114,6 +116,9 @@ class TemplateController(QObject):
         elif task.kind == "restore":
             sample = self.manager.restore(task.deleted, self._closing)
             selected, message = sample.metadata.sample_id, "サンプルを復元しました。"
+        elif task.kind == "quality":
+            quality = self.manager.check_quality(task.oracle, task.sample_id, self._closing)
+            message = "保存音声の品質確認が完了しました。"
         elif task.kind == "play":
             clip = self.manager.load_audio(task.oracle, task.sample_id, self._closing)
             self.player.play(clip, task.volume, self._play_stop)
@@ -121,7 +126,7 @@ class TemplateController(QObject):
         elif task.kind != "refresh":
             raise ValueError("Unknown template task")
         catalog = self.manager.catalog(self._closing)
-        return TemplateResult(task.kind, catalog, selected, deleted, message)
+        return TemplateResult(task.kind, catalog, selected, deleted, message, quality)
 
     def _run(self) -> None:
         while not self._closing.is_set():

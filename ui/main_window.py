@@ -1,5 +1,6 @@
 """Main window with live audio controls and asynchronous clean shutdown."""
 
+from dataclasses import replace
 from datetime import datetime
 import logging
 from pathlib import Path
@@ -7,7 +8,7 @@ from uuid import uuid4
 
 from PySide6.QtCore import QTimer, Qt, Slot
 from PySide6.QtGui import QAction, QCloseEvent
-from PySide6.QtWidgets import QFileDialog, QLabel, QMainWindow, QScrollArea, QTabWidget, QVBoxLayout, QWidget
+from PySide6.QtWidgets import QApplication, QFileDialog, QLabel, QMainWindow, QScrollArea, QTabWidget, QVBoxLayout, QWidget
 
 from audio.backend import AudioDevice
 from audio.device_manager import DeviceCatalog
@@ -24,6 +25,11 @@ from config.manager import ConfigManager
 from config.schema import AppConfig, ConfigValidationError
 from ui.audio_controller import AudioController
 from ui.live_page import LivePage
+from ui.live_controller import LiveController
+from ui.overlay import OverlayWindow
+from ui.overlay_settings import OverlaySettingsDialog
+from ui.oracle_map import copy_positions
+from ui.presentation import present
 from ui.theme import DARK_STYLE
 from ui.operation_controller import OperationController, OperationResult
 from ui.replay_page import ReplayPage
@@ -40,6 +46,7 @@ class MainWindow(QMainWindow):
         controller: AudioController | None = None,
         operations: OperationController | None = None,
         templates: TemplateController | None = None,
+        recognizer: LiveController | None = None,
     ) -> None:
         super().__init__()
         self.data_root = data_root
@@ -47,26 +54,27 @@ class MainWindow(QMainWindow):
         self.config_manager = config_manager or ConfigManager(data_root / "config.json")
         self._closing = False
         self.setWindowTitle("Destiny 2 · Oracle Assistant")
-        self.resize(1024, 820)
-        self.setMinimumSize(760, 600)
+        screen = QApplication.primaryScreen()
+        available = screen.availableGeometry()
+        width, height = max(620, available.width() - 40), max(400, available.height() - 60)
+        self.setMinimumSize(min(760, width), min(600, height))
+        self.resize(min(1024, width), min(820, height))
         self.setStyleSheet(DARK_STYLE)
         central = QWidget()
         layout = QVBoxLayout(central)
-        layout.setContentsMargins(24, 20, 24, 20)
-        layout.setSpacing(12)
-        title = QLabel("Oracle Assistant")
-        title.setObjectName("title")
+        layout.setContentsMargins(16, 10, 16, 10)
+        layout.setSpacing(8)
+        title = QLabel("Oracle Assistant · Destiny 2 / Vault of Glass")
+        title.setObjectName("subtitle")
         layout.addWidget(title)
-        subtitle = QLabel("Destiny 2 · Vault of Glass")
-        subtitle.setObjectName("subtitle")
-        layout.addWidget(subtitle)
         self.warning_label = QLabel(warning or "")
         self.warning_label.setObjectName("warning")
         self.warning_label.setWordWrap(True)
         self.warning_label.setAccessibleName("設定または保存先の警告")
         self.warning_label.setVisible(bool(warning))
         layout.addWidget(self.warning_label)
-        self.live_page = LivePage(self.settings.audio)
+        self.live_page = LivePage(self.settings.audio, labels=self.settings.oracle_labels,
+                                  positions=self.settings.oracle_map_positions)
         self.tabs = QTabWidget()
         self.live_scroll = QScrollArea()
         self.live_scroll.setWidgetResizable(True)
@@ -130,6 +138,30 @@ class MainWindow(QMainWindow):
                 waveform_weight=recognition.waveform_weight,
                 spectrum_weight=recognition.spectrum_weight,
             )
+        self.recognizer = recognizer or LiveController(
+            self._make_live_classifier, self.settings.recognition, self.settings.sequence,
+            RecognitionRecorder(data_root / "logs", self.settings.logging), parent=self,
+        )
+        self.recognizer.updated.connect(self._on_live_update, Qt.ConnectionType.QueuedConnection)
+        self.live_page.dashboard.round_requested.connect(self._select_live_round)
+        self._capture_live = False
+        self._last_audio_loss = (0, 0)
+        self.overlay = OverlayWindow(self.settings.overlay, self.settings.oracle_labels,
+                                     self.settings.oracle_map_positions, parent=self)
+        self.settings.overlay.x, self.settings.overlay.y = self.overlay.x(), self.overlay.y()
+        self.overlay_dialog = OverlaySettingsDialog(self.settings.overlay, self)
+        self.overlay.position_changed.connect(self._save_overlay_position)
+        self.overlay.enabled_changed.connect(lambda value: self._update_overlay({"enabled": value}))
+        self.overlay.drag_mode_changed.connect(self._sync_overlay_controls)
+        self.overlay_dialog.settings_changed.connect(self._update_overlay)
+        self.overlay_dialog.drag_requested.connect(self.overlay.set_drag_mode)
+        self.overlay_dialog.map_edit_requested.connect(self.live_page.dashboard.oracle_map.set_edit_mode)
+        self.overlay_dialog.map_reset_requested.connect(lambda: self._save_map_positions(copy_positions()))
+        self.live_page.dashboard.oracle_map.positions_changed.connect(self._save_map_positions)
+        self.live_page.dashboard.overlay_button.setChecked(self.settings.overlay.enabled)
+        self.live_page.dashboard.overlay_requested.connect(lambda value: self._update_overlay({"enabled": value}))
+        self.live_page.dashboard.overlay_settings_requested.connect(self._show_overlay_settings)
+        self.overlay.set_result(present(self.live_page.dashboard.result))
         recognition_view = self.replay_page.recognition
         recognition_view.event_logs_checkbox.setChecked(self.settings.logging.event_logs)
         recognition_view.uncertain_audio_checkbox.setChecked(self.settings.logging.uncertain_audio)
@@ -138,8 +170,10 @@ class MainWindow(QMainWindow):
         self._record_target = None
         self._last_deleted = None
         self.templates.finished.connect(self._on_template_result, Qt.ConnectionType.QueuedConnection)
-        self.templates.busy_changed.connect(self.calibration_page.set_busy)
+        self.templates.busy_changed.connect(self._on_template_busy)
         self.calibration_page.import_requested.connect(self._import_templates)
+        self.calibration_page.quality_requested.connect(self._check_template_quality)
+        self.calibration_page.label_changed.connect(self._save_oracle_label)
         self.calibration_page.record_requested.connect(self._record_template)
         self.calibration_page.cancel_requested.connect(self.controller.service.cancel_recording)
         self.calibration_page.play_requested.connect(self._play_template)
@@ -154,17 +188,96 @@ class MainWindow(QMainWindow):
         self.live_page.set_status(CaptureStatus("DISCOVERING", "音声デバイスを確認しています。"))
         self.controller.start_worker()
 
-    def _save_config(self) -> None:
+    def _make_live_classifier(self):
+        recognition = self.settings.recognition
+        return OracleClassifier(
+            self.templates.manager, self.settings.audio.internal_sample_rate,
+            recognition.template_aggregation, recognition.top_n,
+            BandpassSettings(recognition.bandpass_low_hz, recognition.bandpass_high_hz)
+            if recognition.bandpass_enabled else None,
+            waveform_weight=recognition.waveform_weight, spectrum_weight=recognition.spectrum_weight,
+        )
+
+    def _update_live_pause(self):
+        message = ("Calibration中 · 認識を一時停止" if self._record_target is not None or self.templates.busy
+                   else "Replay処理中 · 認識を一時停止" if self.operations.busy else "")
+        self.recognizer.set_paused(message)
+
+    @Slot(bool)
+    def _on_template_busy(self, busy):
+        self.calibration_page.set_busy(busy)
+        self._update_live_pause()
+
+    @Slot(object)
+    def _on_live_update(self, update):
+        if self._closing or update.generation != self.recognizer.generation:
+            return
+        view = self.live_page.dashboard.set_result(update.result.snapshot, update.message)
+        if update.result.notices:
+            self.live_page.message_label.setText("\n".join(update.result.notices))
+            self.live_page.message_label.show()
+        if hasattr(self, "overlay"):
+            self.overlay.set_result(view)
+
+    @Slot(int)
+    def _select_live_round(self, round_index):
+        self.recognizer.select_round(round_index)
+        self._clear_live_view(round_index)
+
+    def _clear_live_view(self, round_index=None, message=""):
+        self.live_page.dashboard.clear(round_index, message)
+        if hasattr(self, "overlay"):
+            self.overlay.set_result(present(self.live_page.dashboard.result, message))
+
+    def _sync_overlay_controls(self, *unused):
+        button = self.live_page.dashboard.overlay_button
+        button.blockSignals(True)
+        button.setChecked(self.settings.overlay.enabled)
+        button.blockSignals(False)
+        self.overlay_dialog.sync(self.settings.overlay, self.overlay.drag_mode)
+
+    @Slot(object)
+    def _update_overlay(self, values):
+        proposal = replace(self.settings.overlay, **values)
+        self.overlay.apply_settings(proposal)
+        self.settings.overlay = replace(self.overlay.settings)
+        self._sync_overlay_controls()
+        self._save_config()
+
+    @Slot(int, int)
+    def _save_overlay_position(self, x, y):
+        self.settings.overlay.x, self.settings.overlay.y = x, y
+        self._sync_overlay_controls()
+        self._save_config()
+
+    @Slot(object)
+    def _save_map_positions(self, positions):
+        self.settings.oracle_map_positions = copy_positions(positions)
+        self.live_page.dashboard.oracle_map.set_positions(positions)
+        self.overlay.set_positions(positions)
+        self._save_config()
+
+    @Slot()
+    def _show_overlay_settings(self):
+        self._sync_overlay_controls()
+        self.overlay_dialog.show()
+        self.overlay_dialog.raise_()
+        self.overlay_dialog.activateWindow()
+
+    def _save_config(self) -> bool:
         try:
             self.config_manager.save(self.settings)
+            return True
         except (OSError, ConfigValidationError):
             logger.exception("Could not save audio selection")
             self.warning_label.setText("設定を保存できません。保存先を確認してください。")
             self.warning_label.show()
+            return False
 
     @Slot(bool)
     def _save_event_logging(self, enabled: bool) -> None:
         self.settings.logging.event_logs = enabled
+        self.recognizer.set_logging(self.settings.logging)
         if self.operations.recorder is not None:
             self.operations.recorder.settings.event_logs = enabled
             self.operations.recorder.events.enabled = enabled
@@ -173,6 +286,7 @@ class MainWindow(QMainWindow):
     @Slot(bool)
     def _save_uncertain_audio(self, enabled: bool) -> None:
         self.settings.logging.uncertain_audio = enabled
+        self.recognizer.set_logging(self.settings.logging)
         if self.operations.recorder is not None:
             self.operations.recorder.settings.uncertain_audio = enabled
         self._save_config()
@@ -190,12 +304,17 @@ class MainWindow(QMainWindow):
 
     @Slot(object)
     def _start_capture(self, device: AudioDevice) -> None:
+        self._last_audio_loss = (0, 0)
+        self._clear_live_view(self.live_page.dashboard.round_index)
         self._save_selection(device)
         self.live_page.set_status(CaptureStatus("STARTING", "音声入力を開始しています。", device))
         self.controller.start(device)
 
     @Slot()
     def _stop_capture(self) -> None:
+        self._capture_live = False
+        self.recognizer.stop()
+        self._clear_live_view(self.live_page.dashboard.round_index)
         self.live_page.set_status(CaptureStatus("STOPPING", "音声取得を停止しています。"))
         self.controller.stop()
 
@@ -211,6 +330,20 @@ class MainWindow(QMainWindow):
         if isinstance(event, DeviceCatalog):
             self.live_page.set_catalog(event)
         elif isinstance(event, CaptureStatus):
+            was_live = self._capture_live
+            self._capture_live = event.state == "LIVE"
+            if event.state == "LIVE" and not was_live:
+                self._last_audio_loss = (0, 0)
+                ring = self.controller.service.buffer
+                if ring is not None:
+                    self.recognizer.attach(ring, self.live_page.dashboard.round_index)
+                    self._update_live_pause()
+            elif was_live and event.state in ("DEVICE_LOST", "RECONNECTING"):
+                self.recognizer.invalidate("DEVICE_LOST")
+                self._clear_live_view(self.live_page.dashboard.round_index, "音声の接続が切れました。")
+            elif event.state in ("STOPPED", "ERROR"):
+                self.recognizer.stop()
+                self._clear_live_view(self.live_page.dashboard.round_index)
             self.live_page.set_status(event)
             self.calibration_page.set_live(event.state == "LIVE")
             self.statusBar().showMessage(event.state)
@@ -220,6 +353,11 @@ class MainWindow(QMainWindow):
         elif isinstance(event, RecordingEvent):
             self._on_recording(event)
         elif isinstance(event, AudioLevel):
+            loss = (event.dropped_frames, event.overflow_count)
+            if self._capture_live and any(current > previous for current, previous in zip(loss, self._last_audio_loss)):
+                self.recognizer.invalidate("AUDIO_GAP")
+                self._clear_live_view(self.live_page.dashboard.round_index, "音声が欠落しました。")
+            self._last_audio_loss = loss
             self.live_page.set_level(event)
         ring = self.controller.service.buffer
         self.live_page.set_buffer_available(ring is not None and ring.size_frames > 0)
@@ -232,6 +370,7 @@ class MainWindow(QMainWindow):
         self.replay_page.recognition.event_logs_checkbox.setEnabled(not busy)
         self.replay_page.recognition.uncertain_audio_checkbox.setEnabled(not busy)
         self.live_page.set_operation_busy(busy)
+        self._update_live_pause()
 
     @Slot()
     def _open_wave(self) -> None:
@@ -329,6 +468,34 @@ class MainWindow(QMainWindow):
             self.statusBar().showMessage(message)
 
     @Slot()
+    def _check_template_quality(self):
+        sample = self.calibration_page.sample
+        if sample and self.templates.submit(TemplateTask(
+            "quality", self.calibration_page.oracle, sample_id=sample.metadata.sample_id,
+        )):
+            self.calibration_page.begin_quality()
+
+    @Slot(str, str)
+    def _save_oracle_label(self, oracle, label):
+        self.settings.oracle_labels[oracle] = label
+        labels = self.settings.oracle_labels
+        self.calibration_page.set_labels(labels)
+        self.live_page.dashboard.set_labels(labels)
+        self.overlay.set_labels(labels)
+        sequence = self.replay_page.sequence
+        sequence.labels = labels
+        if sequence.result:
+            sequence.set_result(sequence.result)
+        recognition = self.replay_page.recognition
+        current, detection = recognition.result, recognition.detection
+        recognition.labels = labels
+        recognition.set_result(current)
+        recognition.set_detection(detection)
+        saved = self._save_config()
+        self.calibration_page.message_label.setText("表示名を保存しました。" if saved else
+                                                    "表示名を画面に反映しました。設定は保存できませんでした。")
+
+    @Slot()
     def _import_templates(self) -> None:
         paths, _ = QFileDialog.getOpenFileNames(self, "Oracle WAV を登録", str(self.data_root), "WAV (*.wav *.WAV)")
         if paths:
@@ -341,6 +508,7 @@ class MainWindow(QMainWindow):
         token = uuid4().hex
         self._record_target = (token, self.calibration_page.oracle)
         self.calibration_page.set_recording(True)
+        self._update_live_pause()
         self.calibration_page.progress_bar.setValue(0)
         self.controller.service.record(self.calibration_page.duration_spin.value(), token)
 
@@ -357,6 +525,7 @@ class MainWindow(QMainWindow):
         elif event.state in ("ERROR", "CANCELLED"):
             self._record_target = None
             self.calibration_page.set_recording(False)
+            self._update_live_pause()
 
     @Slot()
     def _play_template(self) -> None:
@@ -385,6 +554,10 @@ class MainWindow(QMainWindow):
             return
         if event.catalog is not None:
             self.calibration_page.set_catalog(event.catalog, event.selected_id)
+        if event.quality is not None:
+            self.calibration_page.set_quality(event.quality)
+        elif event.kind == "quality":
+            self.calibration_page.set_quality_error(event.message)
         if event.deleted is not None:
             self._last_deleted = event.deleted
         elif event.kind == "restore" and event.selected_id:
@@ -395,10 +568,13 @@ class MainWindow(QMainWindow):
 
     def closeEvent(self, event: QCloseEvent) -> None:
         self._closing = True
+        self.overlay.hide()
+        self.overlay_dialog.hide()
         audio_closed = self.controller.shutdown(timeout=0)
         operations_closed = self.operations.shutdown(timeout=0)
         templates_closed = self.templates.shutdown(timeout=0)
-        if audio_closed and operations_closed and templates_closed:
+        live_closed = self.recognizer.shutdown(timeout=0)
+        if audio_closed and operations_closed and templates_closed and live_closed:
             self._close_timer.stop()
             event.accept()
         else:

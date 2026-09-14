@@ -1,4 +1,7 @@
-# Phase 7–9 — Oracle の順序解析
+# Phase 7–12 — Oracleの提示と順序解析
+
+LiveのStart中は連続認識で提示を追跡します。[Live / Overlay](live-overlay.md)を参照してください。
+以下は保持音声またはWAVを使う有限解析の説明です。
 
 Replay WAV、または Live に保持した有限音声から、1ラウンドの PASS1 と PASS2 を分離します。
 2つの列と各音の信頼度を独立して表示・保存します。通常の Analyze は1音の比較を続けます。

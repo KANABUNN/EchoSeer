@@ -251,7 +251,7 @@ confidence、重複除去、連続イベント検出、VoG Sequence は後続 Ph
 
 - Phase 8–9の実戦通し録音による採用精度・誤検出率・補正妥当性
 - 実戦通し録音での提示間隔・音の重なりを含むPass分離・採用精度
-- Phase 10–13: Live の認識表示、Oracle Map、Overlay、Calibration、Replay
+- Phase 13: Replay / DebugのTimelineとスコア詳細の完成
 - Phase 14–16: Dataset 数値評価、実戦ログ、再接続の実戦調整、Hotkey、UX
 - Phase 17: Python がない Windows での onedir EXE 起動
 - Phase 18: Borderless Window 上の Overlay、クリック透過、100 / 125 / 150% DPI、複数モニター、物理切断・再接続、再起動
@@ -338,7 +338,7 @@ GUI は offscreen とデバイス代替を用います。提供音声を使う16
 各声は実 Oracle 録音ですが、連結と無音・提示間隔は人工的に設定しています。
 通し録音・独立録音・会話や効果音・残響の重なりを含む実戦精度を確認した結果ではありません。
 音の重なりを1イベントとして検出すると unknown・不足になり得ます。初期閾値は未校正です。
-取得し続けるLiveの全ラウンド追跡は後続です。Phase 8–9の照合・再構成は下記に記録しています。
+取得し続けるLiveの全ラウンド追跡とOverlayはPhase 10–12に追加しました。後の記録を参照してください。
 
 ## Phase 8–9 — 実装・自動テスト確認済み（2026-09-14）
 
@@ -379,4 +379,56 @@ GUI は offscreen とデバイス代替を用います。提供音声を使う16
 実画面画像・report.jsonは .runtime/phase89-native/、Git対象外です。
 分類誤りは試験用に注入したものと元の順位を記録しています。実戦中の自然な誤認識を補正できた評価ではありません。
 実声の連結・無音・提示間隔は人工条件です。独立録音・残響や会話・効果音の重なりを含む
-実戦の採用率・誤検出率・補正妥当性は未検証です。Live全ラウンド追跡はPhase 10以降です。
+実戦の採用率・誤検出率・補正妥当性は未検証です。Live全ラウンド追跡はPhase 10の後の記録を参照してください。
+
+## Phase 10–12 — 実装・自動テスト確認済み（2026-09-14）
+
+- [x] 連続Liveでnative未読フレームからRMS区間検出・分類・FSM・2回照合
+- [x] 任意のchunk境界、有限Replayと検出区間・元のPASS列が一致
+- [x] Round 1〜5、個数・元の2つのPASS・状態・最低スコア・番号付きOracle Map・確定／推定順
+- [x] PASS境界の重複履歴リセット、CONFIRMED後のquiet lockoutと次Round
+- [x] MISMATCH / INFERRED / CHECKは確定しない。unknown・候補・不一致位置を保持
+- [x] stream変更・読み落とし・overflow・切断は確定消去とCHECK、Reset / Round選択で再開
+- [x] Reset / Stop / 中断で古いOverlayを即時消去、古いgenerationの更新を排除
+- [x] 3秒 / 16 MiBのイベント上限、長音を繰り返しOracleへ分割しない、callbackで解析しない
+- [x] Live summaryのsource・frame範囲・checksum_scope、両ログOFF・保存失敗
+- [x] Overlayの枠なし・最前面・透過背景・クリック透過・一時ドラッグ・順序／マップ
+- [x] 位置・不透明度・倍率・大きさ・表示名・正規化Map配置の保存と再起動
+- [x] 負のモニター座標・モニター間の空白・画面外位置・過大サイズの復元
+- [x] Calibrationの7種類の件数・未登録案内・Record / Import / Listen / Delete / Quality Check
+- [x] Quality Checkのnative Peak / RMS / 長さ / 形式・品質警告・保存音声のchecksum検証
+- [x] 品質結果の選択切替消去、破損ファイル案内、原音・保存metadataの保全
+- [x] Calibration / Replay処理中のLive一時停止と新しい区間からの再開
+- [x] 解析・録音・品質確認中の終了、全4worker解放、exit code 0
+- [x] 新規65件、全 **606 passed**（207.55秒）/ pip check成功
+
+19件は提供ローカル録音を使う任意テストで、音声がない環境ではskipします。
+scripts/evaluate_live.pyは全5ラウンド、異なるchunkと長いduplicate cooldown、
+別Oracleの実録音を2回目の1位置へ入れた不一致の計7ケースです。
+連続Liveと有限Replayの元列が一致し、正常だけCONFIRMED、不一致はMISMATCHです。
+音声と登録テンプレートは同じ元録音で、無音・連結・提示間隔は人工条件です。
+実戦精度の評価ではありません。生成音声・report.jsonは.runtime/live-evaluation/、Git対象外です。
+
+## Phase 10–12 — 実 Windows / 提供音声確認
+
+- [x] Qt platform windowsで提供A〜GをGUIから7種類へ登録し、全7件の品質を再読込確認
+- [x] 録音操作から登録・Quality Check、削除後の件数と元サンプル維持
+- [x] 登録した実音声で連続LiveのRound 1を確定、異なる実音声で3番目をMISMATCH
+- [x] 7個のINFERRED表示fixtureで確定チェックなし、最小240×112の順序Overlayで全7個表示
+- [x] 100% / 125% / 150%のQt表示倍率、主画面・マップ・2つのPASS・小さいOverlayを画像確認
+- [x] テスト用borderless windowでWin32の実クリックが背後へ届き、Overlayがフォーカスを奪わない
+- [x] ドラッグ中だけOverlayへ入力し、移動と位置保存、終了後にクリック透過へ復帰
+- [x] 画面外・過大サイズを画面内へ復元、設定画面を閉じて調整終了
+- [x] 元の提供WAVのSHA-256が前後で一致、終了後の全4workerが0
+
+画像・機械可読レポートは.runtime/phase1012-native/、Git対象外です。
+acceptance-1/report.jsonは提供音声のGUI登録・品質確認・連続認識、
+probe-1.25/とprobe-1.5/のprobe-report.jsonは入力透過・ドラッグ・表示倍率の記録です。
+GUI録音操作はデバイス代替の入力、7個の推定表示は明示的なview fixtureで確認しています。
+
+- [ ] Destiny 2実行中のBorderless WindowでOverlay表示とゲーム操作
+- [ ] 物理的な複数モニターの接続・切断と倍率変更
+- [ ] 独立した録音・実戦の通し録音で精度、重なり・会話・効果音と長時間負荷
+- [ ] 実ゲーム中のCalibration手動録音
+
+操作は[live-overlay.md](live-overlay.md) / [calibration.md](calibration.md)を参照してください。

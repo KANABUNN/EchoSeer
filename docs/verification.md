@@ -1,6 +1,8 @@
 # Phase 8–9 — 2回照合とVoGルールによる推定
 
-1ラウンドの音声を「順序を解析」で処理すると、PASS1 / PASS2 の保存後に照合します。
+LiveのStart中の連続認識と、1ラウンドの音声を「順序を解析」で処理する有限解析は、
+同じPassComparatorとVoG再構成でPASS1 / PASS2を照合します。
+連続Live・Overlayの操作は[live-overlay.md](live-overlay.md)を参照してください。
 通常の Analyze は1音の候補比較です。音声の開き方・Live保持長は [sequence.md](sequence.md) を参照してください。
 
 ## 結果を見る

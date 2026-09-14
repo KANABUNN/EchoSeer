@@ -52,3 +52,17 @@ scripts/evaluate_phase89.pyは同じ提供録音を2回提示に組み、
 出力は .runtime/phase89-evaluation/、詳細は [verification.md](../../docs/verification.md)。
 Phase 7のレシピも現在は完全一致CONFIRMED・異常UNCERTAINの照合まで検証します。
 実戦の自然な誤認識・通し録音・独立録音の精度とは区別します。
+
+## Phase 10の連続Live比較
+
+scripts/evaluate_live.pyはPhase 7の音声レシピを連続Liveへ渡します。
+全5ラウンド、異なるchunk境界・長いduplicate cooldown、別Oracleの実録音を使う不一致の7ケースです。
+有限Replayとの元のPASS列の一致、正常だけのCONFIRMED、元WAV保全を検証します。
+
+```powershell
+.\.venv\Scripts\python.exe scripts\evaluate_live.py
+```
+
+出力は.runtime/live-evaluation/。提供音声がある場合はtest_live_dataset.pyでも実行します。
+音声とテンプレートは同じ元録音、無音・連結・提示間隔は人工条件です。
+独立録音や実戦の通し録音での精度とは区別します。詳細は[live-overlay.md](../../docs/live-overlay.md)。
