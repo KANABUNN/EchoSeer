@@ -9,7 +9,11 @@ from audio.operations import check_cancel
 from audio.sources import ClipSource
 from config.schema import RecognitionSettings, SequenceSettings
 from detector.confidence import (
-    ConfidenceEngine, ConfidenceLevel, can_start_presentation,
+    ConfidenceEngine, ConfidenceLevel, can_fill_matched_position,
+    can_start_presentation,
+)
+from detector.onset_matcher import (
+    OnsetMatcherResourceLimit, build_optional_onset_matcher,
 )
 from detector.streaming import StreamingRmsDetector
 from encounter.sequence import SequenceEngine, SequenceEntry, SequenceSnapshot, SequenceState
@@ -29,14 +33,33 @@ class LiveSequenceSession:
     def __init__(self, classifier, sample_rate: int, channels: int, stream_id: str,
                  start_frame: int = 0, time_origin: float = 0.0, round_index: int = 1,
                  recognition: RecognitionSettings | None = None,
-                 sequence: SequenceSettings | None = None, recorder=None) -> None:
+                 sequence: SequenceSettings | None = None, recorder=None,
+                 cancel: Event | None = None) -> None:
         self.classifier, self.rate, self.stream_id = classifier, sample_rate, stream_id
         self.origin, self.start_frame, self.end_frame = time_origin, start_frame, start_frame
         self.recognition = replace(recognition or RecognitionSettings())
         self.engine = SequenceEngine(sequence)
         self.engine.arm(self._time(start_frame), round_index)
         self.confidence = ConfidenceEngine(self.recognition)
-        self.detector = StreamingRmsDetector(sample_rate, channels, self.recognition.detection_threshold, start_frame)
+        onset_matcher = build_optional_onset_matcher(
+            classifier, sample_rate, channels, start_frame=start_frame,
+            cancel=cancel,
+        )
+        try:
+            detector = StreamingRmsDetector(
+                sample_rate, channels, self.recognition.detection_threshold,
+                start_frame, onset_matcher,
+            )
+        except OnsetMatcherResourceLimit:
+            if onset_matcher is None:
+                raise
+            onset_matcher = None
+            detector = StreamingRmsDetector(
+                sample_rate, channels, self.recognition.detection_threshold,
+                start_frame,
+            )
+        self._matcher_active = onset_matcher is not None
+        self.detector = detector
         self.analyzer, self.recorder = Analyzer(classifier.sample_rate), recorder
         self._processed_frame = start_frame
         self._checksums = []
@@ -87,16 +110,53 @@ class LiveSequenceSession:
             if window is not None and self.engine.state in (
                 SequenceState.ARMED, SequenceState.PASS_1, SequenceState.WAIT_PASS_2, SequenceState.PASS_2
             ):
-                onset, end = self._time(window.onset_frame), self._time(window.signal_end_frame)
+                onset = self._time(window.onset_frame)
+                end = self._time(window.signal_end_frame)
                 before = self.engine.snapshot()
                 analysis = self.analyzer.analyze(ClipSource(window.clip), cancel)
                 raw = self.classifier.classify_preprocessed(analysis.processed, cancel)
-                detection = self.confidence.evaluate(raw, EventContext(
-                    "live", onset, self.stream_id, window.start_frame, window.end_frame))
+                context = EventContext(
+                    "live", onset, self.stream_id,
+                    window.start_frame, window.end_frame,
+                )
+
+                # A single false start chime must not anchor PASS1 forever.
+                # Probe with fresh confidence so a long duplicate cooldown from
+                # that discarded cue cannot prevent a safe restart.
+                if (
+                    self._matcher_active
+                    and window.matched
+                    and before.state == SequenceState.PASS_1
+                    and self.engine.can_restart_incomplete_pass(onset)
+                    and not window.reason
+                ):
+                    probe = ConfidenceEngine(self.recognition).evaluate(raw, context)
+                    if can_fill_matched_position(probe, True):
+                        before = self.engine.restart_incomplete_pass(onset)
+                        self.confidence.reset()
+                        self.evidence.clear()
+                        self._checksums.clear()
+
+                evaluation = (
+                    ConfidenceEngine(self.recognition)
+                    if window.reason else self.confidence
+                )
+                detection = evaluation.evaluate(raw, context)
                 if window.reason:
-                    detection = replace(detection, oracle=None, status=ConfidenceLevel.REJECTED, reason=window.reason)
-                candidate = (
-                    before.state in (SequenceState.PASS_1, SequenceState.PASS_2)
+                    detection = replace(
+                        detection, oracle=None,
+                        status=ConfidenceLevel.REJECTED,
+                        reason=window.reason,
+                    )
+                in_progress = before.state in (
+                    SequenceState.PASS_1, SequenceState.PASS_2,
+                )
+                matcher_eligible = (
+                    not self._matcher_active
+                    or can_fill_matched_position(detection, window.matched)
+                )
+                candidate = matcher_eligible and (
+                    in_progress
                     or can_start_presentation(
                         detection, self.recognition.low_score_threshold
                     )
@@ -109,6 +169,7 @@ class LiveSequenceSession:
                     self.evidence.add(CueEvidence(
                         window.clip, analysis.checksum, detection, raw, before.round_index,
                         2 if second else 1, len(before.pass2 if second else before.pass1) + 1,
+                        window.onset_detection,
                     ))
                     self._checksums.append(analysis.checksum)
                     self._checksums = self._checksums[-14:]
@@ -129,6 +190,7 @@ class LiveSequenceSession:
                     saved = self.recorder.record(
                         detection, raw, window.clip, analysis.checksum, cancel,
                         sequence=sequence_context,
+                        onset_detection=window.onset_detection,
                     )
                     notices.extend(saved.notices)
                 if snapshot.state in (SequenceState.VERIFY, SequenceState.UNCERTAIN):

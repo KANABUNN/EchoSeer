@@ -15,6 +15,8 @@ Replayで「WAVを開く」→「Timelineを解析」を押すと、全区間の
 時刻は元WAV先頭からの発音開始、長さは検出信号の長さです。
 Listenには前後の余裕を含む窓を使います。行の説明には元フレーム範囲と第1候補があります。
 スコアは類似度です。LOW / REJECTEDでも候補と内訳を残し、Oracleはunknownにします。
+Timelineのツールチップと認識JSONLのonset_detectionには、RMS-onlyか開始照合済みか、
+開始照合時の粗い候補・score・marginも表示・保存します。
 
 ## 再現条件と制限
 

@@ -129,6 +129,8 @@ Stop 後の最後のバッファはメモリ内に残り、次の取得開始時
 内部レートは初期 48000 Hz で、audio.internal_sample_rate の設定を使用します。
 peak が 1e-6 以下の音声はゼロとして扱い、微小ノイズを増幅しません。
 左右が逆位相なら平均により打ち消されます。元の音声は別に保持します。
+正規化するのは解析用コピーだけです。録音・保存・再生用に保持する native 元音声そのものは
+書き換えません。
 
 Live / Replay のどちらも一つの完全な入力区間に前処理を適用します。
 callback の境界ごとに変換・正規化することはありません。
@@ -170,6 +172,12 @@ Oracle ごとの複数サンプルはアプリの再起動後も残ります。
 詳しい操作・対応表・最高値または上位N件平均・帯域設定は
 [Oracle 認識の操作説明](docs/recognition.md) を参照してください。
 
+解析候補の検出は入力の背景音量へ自動追従します。連続するBGMで通常の音量境界を作れない場合は、
+登録音の先頭400msに似た立ち上がりを、入力倍率やDC成分に依存しない粗い候補として探し、
+その区間を既存の波形・周波数・信頼度で最終判定します。候補抽出に確定用の厳しい条件を
+そのまま使わないため、雑音下でも弱い候補を後段へ渡せます。単純なゲイン増幅はBGMとの比率を
+変えずクリッピングを招くため、追加のゲイン設定ではなく自動追従と解析用正規化で入力音量差を扱います。
+
 ## 順序解析（Phase 7）
 
 1. Replay で PASS1 と PASS2 を含む1ラウンドの WAV を開きます。
@@ -183,9 +191,13 @@ Live の「直近音声の順序を解析」も、処理開始時にコピーし
 
 両PASSを照合し、採用Oracleの完全一致・期待個数・重複なしを満たすと CONFIRMED と確定順を表示します。
 補正した順序は INFERRED（要確認）、決められない位置は MISMATCH / CHECK です。不一致・重複と元の候補を残します。
-unknown は位置を残し、欠落や間隔不足は UNCERTAIN にします。
+unknown は位置を残し、欠落や間隔不足は UNCERTAIN にします。登録開始照合が使える場合は、
+BGMだけから生じたRMS-onlyのLOW / REJECTED候補を診断履歴には残しつつ、PASSの位置には数えません。
 提供された個別の実 Oracle 音声を2回提示に組み、全5ラウンドの分離を確認しました。
 ラウンド開始音と両PASSを含む27.09秒の実録音1件で、中央→右1→右2の一致と確定を確認しました。
+連続BGMを含む10秒の保持音声では、録音冒頭にある文脈不明の孤立候補を破棄し、4.706秒以後の
+左2→右1→右2をPASS1として復元しました。このWAVにはPASS2がないため、単体の最終状態は
+INCOMPLETE_INPUTです。
 
 ## 設定・ログ保存場所
 
@@ -207,13 +219,13 @@ unknown は位置を残し、欠落や間隔不足は UNCERTAIN にします。
 - 退避できなければ原本を保持し、読み込み・保存のエラーを GUI に表示します。
 - 診断ログは 5 MiB × 最大 4 ファイルです。
 - 比較には waveform_weight / spectrum_weight / template_aggregation / top_n / bandpass を使用します。
-- confidence 閾値は採用判定、detection_threshold は自動環境音追従の上限、sequence.pass_gap / event_timeout は順序解析に使用します。
+- confidence 閾値は採用判定、detection_threshold は入力の背景音量へ自動追従する候補検出の基準値、sequence.pass_gap / event_timeout は順序解析に使用します。
 - lockout_duration / silence_duration は FSM の確定後遷移で使用します。
 - candidate_top_n / max_corrections / inference_margin / reconstruction_margin は候補保存・推定に使用します。
-- 認識ログがONなら logs/sessions/ にイベントと独立したPASSのJSONLを保存します。
+- 認識ログがONなら logs/sessions/ にイベントと独立したPASSのJSONLを保存します。イベントには開始照合の有無・粗い候補・score・marginも含みます。
 
 設定例は [config.example.json](docs/config.example.json) を参照してください。
-認識閾値やタイミングは、非戦闘の実録音1件で初回確認した段階です。戦闘音を含む調整は継続します。
+認識閾値やタイミングは、非戦闘・連続BGMの実録音で初回確認した段階です。銃声やスキル音を含む実戦データでの調整は継続します。
 
 ## プロジェクト構造
 

@@ -4,7 +4,10 @@ import math
 import pytest
 from config.schema import RecognitionSettings, ConfigValidationError
 from detector.classifier import ClassificationResult, OracleScore, SampleScore
-from detector.confidence import ConfidenceEngine, ConfidenceLevel, EventContext
+from detector.confidence import (
+    ConfidenceEngine, ConfidenceLevel, EventContext, can_fill_matched_position,
+    can_start_presentation,
+)
 from dsp.correlation import CorrelationMatch
 from encounter.vog_oracles import OracleId
 
@@ -48,6 +51,47 @@ def test_no_candidates_are_rejected(status):
     decision=ConfidenceEngine().evaluate(ClassificationResult(status))
     assert decision.status==ConfidenceLevel.REJECTED and decision.oracle is None
     assert decision.confidence is None
+
+
+def test_rejected_window_cannot_start_presentation_despite_a_strong_ranking():
+    accepted = ConfidenceEngine().evaluate(ranking())
+    assert can_start_presentation(accepted, .55)
+    rejected = replace(
+        accepted, oracle=None, status=ConfidenceLevel.REJECTED, reason="EVENT_LIMIT",
+    )
+    assert rejected.confidence == pytest.approx(.95)
+    assert not can_start_presentation(rejected, .55)
+
+
+@pytest.mark.parametrize("kind,matched,expected", [
+    ("accepted", False, True),
+    ("accepted", True, True),
+    ("low", False, False),
+    ("low", True, True),
+    ("rejected", False, False),
+    ("rejected", True, False),
+    ("clipped", False, False),
+    ("clipped", True, True),
+    ("duplicate", True, False),
+])
+def test_matcher_backed_position_policy(kind, matched, expected):
+    if kind == "low":
+        decision = ConfidenceEngine().evaluate(ranking(.83, .82))
+    elif kind == "rejected":
+        decision = ConfidenceEngine().evaluate(ranking(.2, .1))
+    elif kind == "clipped":
+        decision = replace(
+            ConfidenceEngine().evaluate(ranking()),
+            oracle=None, status=ConfidenceLevel.REJECTED,
+            reason="CLIPPED_EVENT",
+        )
+    else:
+        decision = ConfidenceEngine().evaluate(ranking())
+        if kind == "duplicate":
+            decision = replace(
+                decision, oracle=None, duplicate=True, reason="DUPLICATE",
+            )
+    assert can_fill_matched_position(decision, matched) is expected
 
 
 @pytest.mark.parametrize("missing",[(OracleId.R3,),tuple(o for o in OracleId if o!=OracleId.L2)])

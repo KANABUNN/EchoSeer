@@ -63,7 +63,7 @@ def test_long_sound_is_one_bounded_rejected_event():
     events=list(RmsEventDetector().detect(original))
     assert len(events)==1 and events[0].reason=="EVENT_LIMIT"
     assert events[0].clip.duration_seconds<=3
-    assert events[0].signal_end_frame>events[0].end_frame
+    assert events[0].signal_end_frame == events[0].end_frame
 
 
 def test_native_byte_limit(monkeypatch):

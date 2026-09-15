@@ -37,7 +37,7 @@ Replay の「認識結果」が、信頼度判定後に採用した Oracle で�
 | duplicate_cooldown | 0.45 | 同じ Oracle の重複抑制時間。0 で無効 |
 
 これらは初期値であり、実戦の誤検出率から校正した値ではありません。
-detection_threshold はイベント開始RMSの固定値兼、自動環境音追従の上限として使用します。
+detection_threshold は履歴がない間の開始RMSです。静かな背景では自動追従値の上限、高い連続背景音では「背景RMSの2倍」と比較する下限として使います。
 手順と時間設定は [sequence.md](sequence.md) を参照してください。
 
 ## Live と Replay の時刻

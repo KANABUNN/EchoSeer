@@ -18,9 +18,15 @@ def clip(seconds=.2):
     return AudioClip(np.stack((values,values*.3+.01),axis=1),rate)
 
 
-def record(recorder,raw=None,original=None,cancel=None,context=None):
+def record(
+    recorder, raw=None, original=None, cancel=None, context=None,
+    onset_detection=None,
+):
     raw=raw or ranking(.83,.82)
-    return recorder.record(ConfidenceEngine().evaluate(raw,context),raw,original or clip(),"test-hash",cancel)
+    return recorder.record(
+        ConfidenceEngine().evaluate(raw,context), raw, original or clip(),
+        "test-hash", cancel, onset_detection=onset_detection,
+    )
 
 
 @pytest.mark.parametrize("events,audio",[(False,False),(True,False),(False,True),(True,True)])
@@ -42,6 +48,22 @@ def test_logging_toggles_are_independent(tmp_path,events,audio):
         assert len(data["ranking"])==7 and data["checksum"]=="test-hash"
         assert bool(data["audio_path"])==audio
         assert data["timestamp"]>1_000_000_000 and data["event_time"]==0
+
+
+def test_onset_detection_diagnostics_are_preserved_in_event_log(tmp_path):
+    diagnostic = {
+        "matched": True,
+        "candidate": "L2",
+        "score": .931,
+        "margin": .42,
+    }
+    result = record(
+        RecognitionRecorder(tmp_path/"logs"),
+        onset_detection=diagnostic,
+    )
+    data = json.loads(result.event_path.read_text(encoding="utf-8"))
+
+    assert data["onset_detection"] == diagnostic
 
 
 def test_accepted_and_silent_events_do_not_save_uncertain_audio(tmp_path):

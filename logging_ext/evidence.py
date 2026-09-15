@@ -18,6 +18,7 @@ class CueEvidence:
     round_index: int
     pass_number: int
     index: int
+    onset_detection: dict | None = None
 
 
 class CueEvidenceCache:
@@ -59,6 +60,7 @@ class CueEvidenceCache:
                 saved=recorder.record(item.detection,item.classification,item.clip,item.checksum,cancel,
                     sequence={"round":item.round_index,"pass":item.pass_number,"index":item.index,
                               "state":snapshot.state.value,"reason":snapshot.reason},
-                    problem_reason="PASS_"+(verification.status.value if verification else "CHECK"))
+                    problem_reason="PASS_"+(verification.status.value if verification else "CHECK"),
+                    onset_detection=item.onset_detection)
                 notices.extend(saved.notices)
         return tuple(dict.fromkeys(notices))

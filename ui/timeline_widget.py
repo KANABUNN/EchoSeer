@@ -74,13 +74,24 @@ class TimelineWidget(QGroupBox):
             d = trace.detection
             def score(value):
                 return f"{value:.6f}" if value is not None else "—"
+            onset_detail = "開始照合: RMS-only"
+            if trace.onset_matched:
+                onset_detail = (
+                    f"開始照合: {trace.onset_match_oracle or '候補不明'} / "
+                    f"score {score(trace.onset_match_score)} / "
+                    f"margin {score(trace.onset_match_margin)}"
+                )
             texts = (timestamp(trace.onset_frame / sample_rate),
                      f"{(trace.signal_end_frame-trace.onset_frame)/sample_rate:.3f}秒",
                      d.oracle.value if d.oracle else "unknown", d.status.value,
                      score(d.confidence), score(d.waveform_score), score(d.spectrum_score), d.reason)
             for column, value in enumerate(texts):
                 item = QTableWidgetItem(value)
-                item.setToolTip(f"native frames {trace.start_frame}–{trace.end_frame}\n第1候補: {d.best_candidate.value if d.best_candidate else '—'}")
+                item.setToolTip(
+                    f"native frames {trace.start_frame}–{trace.end_frame}\n"
+                    f"第1候補: {d.best_candidate.value if d.best_candidate else '—'}\n"
+                    f"{onset_detail}"
+                )
                 self.table.setItem(row, column, item)
         if result.traces:
             self.table.selectRow(len(result.traces)-1 if select_last else 0)

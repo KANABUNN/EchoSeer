@@ -64,10 +64,17 @@ class SettingsPage(QWidget):
         self.advanced = QWidget()
         advanced_layout = QVBoxLayout(self.advanced)
         recognition = self._group(advanced_layout, "認識条件")
+        recognition_note = QLabel(
+            "解析候補の音量は入力の背景レベルへ自動追従します。比較直前の正規化は"
+            "解析用コピーだけに適用し、録音・保存・再生用の元音声は変更しません。"
+        )
+        recognition_note.setTextFormat(Qt.TextFormat.PlainText)
+        recognition_note.setWordWrap(True)
+        recognition.addRow(recognition_note)
         self._number(recognition, "audio.internal_sample_rate", "内部サンプルレート（Hz）", 8000, 192000, integer=True)
         labels = {
             "waveform_weight": "波形の重み", "spectrum_weight": "スペクトルの重み",
-            "detection_threshold": "固定検出しきい値（自動調整の上限）", "confidence_threshold": "採用スコア",
+            "detection_threshold": "基準検出しきい値（入力音量へ自動追従）", "confidence_threshold": "採用スコア",
             "high_confidence_threshold": "高信頼スコア", "low_score_threshold": "低スコアの境界",
             "margin_threshold": "採用に必要な候補差", "high_margin_threshold": "高信頼に必要な候補差",
             "duplicate_cooldown": "重複を抑制する時間（秒）",

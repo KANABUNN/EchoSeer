@@ -129,8 +129,26 @@ class ConfidenceEngine:
 def can_start_presentation(result: DetectionResult, low_score_threshold: float) -> bool:
     """Only a plausible Oracle match may start a presentation."""
     return (
-        result.confidence is not None
+        result.status is not ConfidenceLevel.REJECTED
+        and result.confidence is not None
         and _at_least(result.confidence, low_score_threshold)
+    )
+
+_MATCHED_UNSAFE_WINDOWS = frozenset({
+    "CLIPPED_EVENT", "SHORT_EVENT", "EVENT_LIMIT",
+})
+
+
+def can_fill_matched_position(
+    result: DetectionResult, matched_onset: bool,
+) -> bool:
+    """Keep accepted cues and matcher-backed uncertain windows in PASS order."""
+    return result.accepted or (
+        matched_onset
+        and (
+            result.status is ConfidenceLevel.LOW
+            or result.reason in _MATCHED_UNSAFE_WINDOWS
+        )
     )
 
 def _at_least(value: float, threshold: float) -> bool:

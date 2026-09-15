@@ -92,9 +92,28 @@ def evaluate(samples_dir: Path, output_dir: Path) -> dict:
             passed &= (snapshot.verification.status.value == "MISMATCH"
                        and snapshot.verification.mismatch_indices == (count,)
                        and actual_first == expected_first and actual_second == expected_second)
-        elif mode in ("noise","eof"):
-            passed &= snapshot.state.value=="UNCERTAIN" and len(actual_first)==len(actual_second)==count
-            passed &= actual_first[1] is None if mode=="noise" else actual_second[-1] is None
+        elif mode == "noise":
+            # With registered-onset filtering, an Oracle destroyed by -20 dB
+            # SNR noise is diagnostic-only. It must not become a PASS slot or
+            # allow the remaining presentation to be confirmed.
+            passed &= (
+                snapshot.state.value == "UNCERTAIN"
+                and snapshot.reason == "INCOMPLETE_INPUT"
+                and actual_first == expected_second
+                and not actual_second
+                and any(
+                    trace.detection.reason == "BELOW_LOW_THRESHOLD"
+                    for trace in result.traces
+                )
+            )
+        elif mode == "eof":
+            # A registered onset proves that a final, truncated window belongs
+            # in the presentation, but its Oracle must stay unknown.
+            passed &= (
+                snapshot.state.value == "UNCERTAIN"
+                and len(actual_first) == len(actual_second) == count
+                and actual_second[-1] is None
+            )
         elif mode == "missing":
             passed &= snapshot.state.value=="UNCERTAIN" and len(actual_first)==count-1 and not actual_second
         elif mode == "early":
@@ -102,9 +121,14 @@ def evaluate(samples_dir: Path, output_dir: Path) -> dict:
         report = {"case":name,"round":round_index,"mode":mode,"passed":bool(passed),"wav":str(path),
                   "state":snapshot.state.value,"reason":snapshot.reason,"expected_pass1":expected_first,
                   "expected_pass2":expected_second,"pass1":actual_first,"pass2":actual_second,
+                  "ignored_events":snapshot.ignored_events,
                   "confirmed":snapshot.confirmed,"final_sequence":snapshot.final_sequence,"verification":asdict(snapshot.verification),"timeline":timeline,
                   "traces":[{"onset_frame":t.onset_frame,"signal_end_frame":t.signal_end_frame,
                              "window_start":t.start_frame,"window_end":t.end_frame,
+                             "onset_matched":t.onset_matched,
+                             "onset_match_oracle":t.onset_match_oracle,
+                             "onset_match_score":t.onset_match_score,
+                             "onset_match_margin":t.onset_match_margin,
                              "oracle":t.detection.oracle.value if t.detection.oracle else None,
                              "candidate":t.detection.best_candidate.value if t.detection.best_candidate else None,
                              "score":t.detection.confidence,"level":t.detection.status.value,"reason":t.detection.reason}

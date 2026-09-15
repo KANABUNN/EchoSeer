@@ -10,9 +10,11 @@ from audio.sources import ClipSource
 from config.schema import RecognitionSettings, SequenceSettings
 from detector.classifier import ClassificationResult, OracleClassifier
 from detector.confidence import (
-    ConfidenceEngine, ConfidenceLevel, DetectionResult, can_start_presentation,
+    ConfidenceEngine, ConfidenceLevel, DetectionResult,
+    can_fill_matched_position, can_start_presentation,
 )
 from detector.events import RmsEventDetector
+from detector.onset_matcher import build_optional_onset_matcher
 from encounter.sequence import SequenceEngine, SequenceSnapshot, SequenceEntry, SequenceState
 from logging_ext.recognition_logger import RecognitionRecorder
 from replay.analyzer import AnalysisResult, Analyzer
@@ -30,6 +32,10 @@ class CueTrace:
     signal_end_frame: int
     detection: DetectionResult
     classification: ClassificationResult
+    onset_matched: bool = False
+    onset_match_oracle: str | None = None
+    onset_match_score: float | None = None
+    onset_match_margin: float | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -61,12 +67,15 @@ class ReplaySequenceAnalyzer:
         engine = SequenceEngine(self.sequence_settings)
         confidence = ConfidenceEngine(self.recognition)
         detector = RmsEventDetector(self.recognition.detection_threshold)
+        onset_matcher = build_optional_onset_matcher(
+            self.classifier, original.sample_rate, original.channels, cancel=cancel,
+        )
         engine.arm(base, round_index)
         if progress:
             progress(engine.snapshot())
         traces, notices = [], []
         evidence = CueEvidenceCache()
-        for window in detector.detect(original, cancel):
+        for window in detector.detect(original, cancel, onset_matcher):
             check_cancel(cancel)
             onset = base + window.onset_frame / original.sample_rate
             signal_end = base + window.signal_end_frame / original.sample_rate
@@ -79,11 +88,41 @@ class ReplaySequenceAnalyzer:
             context = EventContext("live" if live else "replay", onset,
                                    source_context.stream_id if live else None,
                                    offset + window.start_frame, offset + window.end_frame)
-            detection = confidence.evaluate(classification, context)
+            if (
+                onset_matcher is not None
+                and window.matched
+                and before.state == SequenceState.PASS_1
+                and engine.can_restart_incomplete_pass(onset)
+                and not window.reason
+            ):
+                probe = ConfidenceEngine(self.recognition).evaluate(
+                    classification, context,
+                )
+                if can_fill_matched_position(probe, True):
+                    before = engine.restart_incomplete_pass(onset)
+                    confidence.reset()
+                    evidence.clear()
+
+            evaluation = (
+                ConfidenceEngine(self.recognition)
+                if window.reason else confidence
+            )
+            detection = evaluation.evaluate(classification, context)
             if window.reason:
-                detection = replace(detection, oracle=None, status=ConfidenceLevel.REJECTED, reason=window.reason)
-            candidate = (
-                before.state in (SequenceState.PASS_1, SequenceState.PASS_2)
+                detection = replace(
+                    detection, oracle=None,
+                    status=ConfidenceLevel.REJECTED,
+                    reason=window.reason,
+                )
+            in_progress = before.state in (
+                SequenceState.PASS_1, SequenceState.PASS_2,
+            )
+            matcher_eligible = (
+                onset_matcher is None
+                or can_fill_matched_position(detection, window.matched)
+            )
+            candidate = matcher_eligible and (
+                in_progress
                 or can_start_presentation(
                     detection, self.recognition.low_score_threshold
                 )
@@ -109,17 +148,21 @@ class ReplaySequenceAnalyzer:
                     evidence.add(CueEvidence(
                         window.clip, cue_analysis.checksum, detection, classification,
                         round_index, pass_number, index,
+                        window.onset_detection,
                     ))
             else:
                 snapshot = engine.ignore(signal_end)
             traces.append(CueTrace(
                 window.start_frame, window.end_frame, window.onset_frame,
                 window.signal_end_frame, detection, classification,
+                window.matched, window.match_oracle,
+                window.match_score, window.match_margin,
             ))
             if self.recorder:
                 persisted = self.recorder.record(
                     detection, classification, window.clip, cue_analysis.checksum, cancel,
                     sequence=sequence_context,
+                    onset_detection=window.onset_detection,
                 )
                 notices.extend(persisted.notices)
             if progress:

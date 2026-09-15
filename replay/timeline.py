@@ -9,6 +9,7 @@ from audio.sources import ClipSource
 from config.schema import RecognitionSettings
 from detector.confidence import ConfidenceEngine, ConfidenceLevel
 from detector.events import RmsEventDetector
+from detector.onset_matcher import build_optional_onset_matcher
 from replay.analyzer import Analyzer
 from replay.provenance import canonical, digest, recognition_profile
 from replay.sequence_analyzer import CueTrace, MAX_SEQUENCE_SECONDS
@@ -48,19 +49,38 @@ class ReplayTimelineAnalyzer:
             raise AudioDataError("Timeline解析は120秒以内のWAVを選んでください。")
         profile = recognition_profile(self.classifier, self.recognition, cancel)
         confidence, traces, notices = ConfidenceEngine(self.recognition), [], []
-        for window in RmsEventDetector(self.recognition.detection_threshold).detect(original, cancel):
+        onset_matcher = build_optional_onset_matcher(
+            self.classifier, original.sample_rate, original.channels, cancel=cancel,
+        )
+        for window in RmsEventDetector(self.recognition.detection_threshold).detect(
+            original, cancel, onset_matcher,
+        ):
             check_cancel(cancel)
             result = self.analyzer.analyze(ClipSource(window.clip), cancel)
             raw = self.classifier.classify_preprocessed(result.processed, cancel)
-            decision = confidence.evaluate(raw, EventContext("replay", window.onset_frame / original.sample_rate,
-                                                            start_frame=window.start_frame, end_frame=window.end_frame))
+            context = EventContext(
+                "replay", window.onset_frame / original.sample_rate,
+                start_frame=window.start_frame, end_frame=window.end_frame,
+            )
+            evaluation = (
+                ConfidenceEngine(self.recognition)
+                if window.reason else confidence
+            )
+            decision = evaluation.evaluate(raw, context)
             if window.reason:
                 decision = replace(decision, oracle=None, status=ConfidenceLevel.REJECTED, reason=window.reason)
-            traces.append(CueTrace(window.start_frame, window.end_frame, window.onset_frame,
-                                   window.signal_end_frame, decision, raw))
+            traces.append(CueTrace(
+                window.start_frame, window.end_frame, window.onset_frame,
+                window.signal_end_frame, decision, raw,
+                window.matched, window.match_oracle,
+                window.match_score, window.match_margin,
+            ))
             notices.extend(raw.notices)
             if self.recorder:
-                notices.extend(self.recorder.record(decision, raw, window.clip, result.checksum, cancel).notices)
+                notices.extend(self.recorder.record(
+                    decision, raw, window.clip, result.checksum, cancel,
+                    onset_detection=window.onset_detection,
+                ).notices)
         if recognition_profile(self.classifier, self.recognition, cancel) != profile:
             raise AudioDataError("解析中にテンプレートが変わりました。同じ条件で再解析してください。")
         return TimelineResult(tuple(traces), canonical(profile), tuple(dict.fromkeys(notices)))

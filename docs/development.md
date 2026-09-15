@@ -607,3 +607,43 @@ Replayと3種類のLiveチャンク境界が一致した。元録音・設定・
 登録済み7音を使い、ReplayとLiveの3種類のchunk分割で両PASSの
 中央 / 右1 / 右2をCONFIRMEDまで確認した。元WAV・保存設定・テンプレートは変更していない。
 全734件（493.66秒）とpip checkが成功した。
+
+## 2026-09-15 連続BGMと入力音量への対応
+
+10秒・stereo 44100 Hzの実戦保持音声では、20ms RMSの最小値が約0.0159で、
+ほぼ全区間が固定終了基準0.010を上回り、従来は全体を長い1候補へ連結していた。
+単純なゲイン増幅はOracleと背景音のS/N比を改善せず、この録音は既にpeak 1.0へ達していたため、
+利用者が調整するゲイン項目は追加しない。入力の背景レベルへ候補検出を自動追従させ、
+分類直前の解析用コピーへ従来のpeak正規化を適用する。録音・保存・再生用のnative元音声と
+登録済みoriginal.wavは変更しない。
+
+連続BGM用には、登録音の先頭400msをnative rateのmonoへ変換し、振幅倍率とDC成分を除いた
+正規化相関で開始候補を探索する。20msごとにOracle別の最高値を集約し、score 0.60、
+次点差0.10、refractory 0.9秒で粗い局所peakを選ぶ。Liveはmatcher lookback 0.62秒と
+直前RMS retrigger保留0.20秒を合わせたwatermarkまで処理を遅らせ、FSMへ過去時刻を返さない。
+有限WAVは開始候補を先に確定してからRMS timelineを処理する。
+
+提供WAVでは粗い開始候補が0.418209秒 R2、4.706213秒 L2、6.007551秒 R1、
+7.319546秒 R2に得られた。0.418秒のR2は録音開始前の文脈と正解ラベルがない孤立候補であり、
+4.706秒のL2候補がpass_gap後かつevent_timeout前に来たためsingleton PASS1を再開し、
+最終PASS1はL2 / R1 / R2となった。最終分類の複合scoreは順に0.917226 / 0.912227 /
+0.909316だった。WAVは提示1回分で終了するためReplayの最終状態は
+UNCERTAIN / INCOMPLETE_INPUTで、PASS2がないことを正しく示す。
+
+matcher有効時はRMS-onlyのLOW / REJECTEDをTimelineとログへ残しながらPASS位置から除外し、
+matcher由来のLOWと構造制限付き候補をunknown位置として残す。冒頭候補の自動再開はsingleton、
+pass_gap以上、event_timeout未満、新候補がmatcher由来という条件に限定し、
+再開時はconfidence・問題音声cache・Live checksum履歴を初期化する。開始照合の由来と
+粗い候補Oracle・score・marginはCueTrace、Timelineツールチップ、認識JSONLの
+onset_detectionへ伝播し、Phase 17の閾値調整に使えるようにした。
+
+10秒WAVをLiveへ960 / 4093 / 22050 frame単位で渡し、matcherの未確定末尾を処理するため
+1.2秒の継続無音を加えた場合も、3条件すべてでPASS1がL2 / R1 / R2、状態が
+WAIT_PASS_2、ignored 6となった。
+
+同じ実録音内の1提示区間を2回配置した13.6秒の検証では、Replayと上記3種類のLive分割で
+L2 / R1 / R2の両PASSをCONFIRMEDした。これは同一提示を複製した回帰確認であり、
+独立した2提示の正解データではない。27.093秒の別実録音はReplayと3種類のLive分割で
+MID / R1 / R2の両PASSをCONFIRMEDした。検証前後で2つのWAVと登録7音のSHA-256が
+不変であることも確認した。全820件（267.34秒）とpip checkが成功した。
+銃声・スキル音を含む誤検出率と実戦精度の測定はPhase 17 / 18の対象として残す。

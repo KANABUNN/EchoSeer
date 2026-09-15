@@ -157,7 +157,7 @@ class LiveController(QObject):
                         origin = (stamp or time.monotonic()) - cursor / state.ring.sample_rate
                         session = LiveSequenceSession(self.classifier_factory(), state.ring.sample_rate,
                             state.ring.channels, stream_id, cursor, origin, state.round_index,
-                            recognition, sequence, self.recorder)
+                            recognition, sequence, self.recorder, cancel=state.cancel)
                         self._emit(state, LiveResult(session.engine.snapshot()))
                     else:
                         session = None

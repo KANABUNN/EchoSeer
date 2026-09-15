@@ -177,6 +177,28 @@ class SequenceEngine:
                 self._set(SequenceState.UNCERTAIN, "EVENT_TIMEOUT")
         return self.snapshot()
 
+    def can_restart_incomplete_pass(self, now: float) -> bool:
+        _time(now)
+        return (
+            self.state == SequenceState.PASS_1
+            and len(self._pass1) == 1
+            and self._last_end is not None
+            and _elapsed(now - self._last_end, self.settings.pass_gap)
+            and not _elapsed(now - self._last_end, self.settings.event_timeout)
+        )
+
+    def restart_incomplete_pass(self, now: float) -> SequenceSnapshot:
+        """Discard an isolated first-pass prefix after the configured pass gap."""
+        if not self.can_restart_incomplete_pass(now):
+            raise ValueError("No stale incomplete first pass to restart")
+        self._clock(now)
+        self._ignored += len(self._pass1)
+        self._pass1.clear()
+        self._last_end = self._silence_since = None
+        self._verification = None
+        self._set(SequenceState.ARMED, "PASS_1_RESTARTED")
+        return self.snapshot()
+
     def add(self, entry: SequenceEntry) -> SequenceSnapshot:
         if self.state not in (SequenceState.ARMED, SequenceState.PASS_1, SequenceState.WAIT_PASS_2, SequenceState.PASS_2):
             self.advance(max(self._now, entry.timestamp))

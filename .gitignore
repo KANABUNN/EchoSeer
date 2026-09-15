@@ -26,5 +26,7 @@ logs/
 *.p12
 credentials.json
 secrets.json
+credentials/
+secrets/
 recordings/
 captures/

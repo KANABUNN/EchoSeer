@@ -84,6 +84,62 @@ def test_first_pass_gap_before_expected_count_is_uncertain():
     assert len(result.pass1)==1 and not result.pass2
 
 
+@pytest.mark.parametrize("gap,allowed", [
+    (1.999, False), (2.0, True), (4.999, True), (5.0, False),
+])
+def test_singleton_pass_restart_has_closed_gap_boundaries(gap, allowed):
+    engine = SequenceEngine()
+    engine.arm()
+    first = engine.add(entry(start=1, stream="A"))
+    last = first.pass1[-1].end_time
+    now = last + gap
+
+    assert engine.can_restart_incomplete_pass(now) is allowed
+    if not allowed:
+        with pytest.raises(ValueError):
+            engine.restart_incomplete_pass(now)
+        assert engine.snapshot() == first
+        return
+
+    restarted = engine.restart_incomplete_pass(now)
+    assert restarted.state == SequenceState.ARMED
+    assert not restarted.pass1 and not restarted.pass2
+    assert restarted.ignored_events == 1
+    transition = restarted.transitions[-1]
+    assert (
+        transition.before, transition.after, transition.reason,
+    ) == (
+        SequenceState.PASS_1, SequenceState.ARMED, "PASS_1_RESTARTED",
+    )
+
+
+def test_restart_refuses_two_positions_and_preserves_source_identity():
+    engine = SequenceEngine()
+    engine.arm()
+    engine.add(entry(start=1, stream="A"))
+    second = engine.add(entry(OracleId.L2, start=1.7, stream="A"))
+    now = second.pass1[-1].end_time + 2
+
+    assert not engine.can_restart_incomplete_pass(now)
+    with pytest.raises(ValueError):
+        engine.restart_incomplete_pass(now)
+    assert engine.snapshot() == second
+    incomplete = engine.add(entry(OracleId.L3, start=now, stream="A"))
+    assert incomplete.state == SequenceState.UNCERTAIN
+    assert incomplete.reason == "INCOMPLETE_PASS"
+    assert len(incomplete.pass1) == 2
+
+    engine = SequenceEngine()
+    engine.arm()
+    first = engine.add(entry(start=1, stream="A"))
+    now = first.pass1[-1].end_time + 2
+    engine.restart_incomplete_pass(now)
+    changed = engine.add(entry(OracleId.L2, start=now, stream="B"))
+    assert changed.state == SequenceState.UNCERTAIN
+    assert changed.reason == "SOURCE_CHANGED"
+    assert not changed.pass1 and changed.ignored_events == 2
+
+
 @pytest.mark.parametrize("gap,expected",[(1.999,"UNCERTAIN"),(2.,"PASS_2")])
 def test_pass_gap_boundary(gap,expected):
     engine,_=presentations()

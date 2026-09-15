@@ -59,7 +59,8 @@ class RecognitionRecorder:
 
     def record(self, detection: DetectionResult, classification: ClassificationResult,
                original: AudioClip, checksum: str, cancel: Event | None = None,
-               sequence: dict | None = None, problem_reason: str | None = None) -> PersistenceResult:
+               sequence: dict | None = None, problem_reason: str | None = None,
+               onset_detection: dict | None = None) -> PersistenceResult:
         check_cancel(cancel)
         event_id = uuid4().hex
         wall_time = time.time()
@@ -102,6 +103,7 @@ class RecognitionRecorder:
                 "second_candidate": detection.second_candidate.value if detection.second_candidate else None,
                 "second_score": detection.second_score, "margin": detection.margin,
                 "classification_status": classification.status, "checksum": checksum,
+                "onset_detection": onset_detection,
                 "missing_oracles": [oracle.value for oracle in classification.missing_oracles],
                 "ranking": [{"oracle": item.oracle.value, "combined_score": item.score,
                              "waveform_score": item.waveform_score, "spectrum_score": item.spectrum_score,

@@ -15,11 +15,14 @@ from tests.unit.test_event_detector import audio
 from tests.unit.test_confidence import ranking
 
 
-def cue(index=1,pass_number=1):
+def cue(index=1,pass_number=1,onset_detection=None):
     clip=audio([(.3,.2)])
     raw=ranking()
     decision=ConfidenceEngine().evaluate(raw)
-    return CueEvidence(clip,"checksum",decision,raw,1,pass_number,index)
+    return CueEvidence(
+        clip, "checksum", decision, raw, 1, pass_number, index,
+        onset_detection,
+    )
 
 
 def test_accepted_audio_defaults_off_and_opt_in_preserves_native(tmp_path):
@@ -43,13 +46,21 @@ def test_accepted_capture_does_not_enable_low_capture_when_uncertain_off(tmp_pat
 
 
 def test_problem_keeps_high_decision_and_saves_audio_evidence(tmp_path):
-    item=cue(2)
+    onset = {
+        "matched": True, "candidate": "L2", "score": .93, "margin": .4,
+    }
+    item=cue(2,onset_detection=onset)
     recorder=RecognitionRecorder(tmp_path)
-    saved=recorder.record(item.detection,item.classification,item.clip,item.checksum,
-                          sequence={"round":1,"pass":2,"index":2},problem_reason="PASS_MISMATCH")
+    saved=recorder.record(
+        item.detection, item.classification, item.clip, item.checksum,
+        sequence={"round":1,"pass":2,"index":2},
+        problem_reason="PASS_MISMATCH",
+        onset_detection=item.onset_detection,
+    )
     p=json.loads(recorder.events.path.read_text(encoding="utf-8").splitlines()[-1])
     assert saved.audio_path and p["event_type"]=="audio_evidence"
     assert p["oracle"]=="L2" and p["confidence_level"]=="HIGH" and p["index"]==2
+    assert p["onset_detection"] == onset
 
 
 def test_cache_budget_and_clear_are_bounded_owned_references():
@@ -64,8 +75,12 @@ def test_cache_budget_and_clear_are_bounded_owned_references():
 
 def test_conflict_saves_only_affected_indices_once_even_after_repeated_fault(tmp_path):
     cache=CueEvidenceCache()
+    onset = {
+        "matched": True, "candidate": "L2", "score": .93, "margin": .4,
+    }
     for pass_number in (1,2):
-        for index in (1,2,3):cache.add(cue(index,pass_number))
+        for index in (1,2,3):
+            cache.add(cue(index,pass_number,onset))
     snapshot=SimpleNamespace(confirmed=False,verification=SimpleNamespace(mismatch_indices=(2,),status=SimpleNamespace(value="MISMATCH")),
                              state=SimpleNamespace(value="UNCERTAIN"),reason="CONFLICT")
     recorder=RecognitionRecorder(tmp_path)
@@ -75,6 +90,7 @@ def test_conflict_saves_only_affected_indices_once_even_after_repeated_fault(tmp
     assert len(list(tmp_path.rglob("*.wav")))==2
     records=[json.loads(row) for row in recorder.events.path.read_text(encoding="utf-8").splitlines()]
     assert all(row["event_type"]=="audio_evidence" and row["index"]==2 for row in records)
+    assert all(row["onset_detection"] == onset for row in records)
 
 
 def test_both_audio_switches_off_do_not_write_problem_wavs(tmp_path):

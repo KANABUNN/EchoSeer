@@ -1,4 +1,5 @@
 """Continuous recognition must match finite windows and never join interrupted streams."""
+import json
 from threading import Event
 
 import numpy as np
@@ -7,13 +8,17 @@ import pytest
 from audio.data import AudioClip, AudioDataError
 from audio.operations import OperationCancelled
 from audio.ring_buffer import RingBuffer
-from config.schema import RecognitionSettings, SequenceSettings
-from detector.events import RmsEventDetector
+from config.schema import LoggingSettings, RecognitionSettings, SequenceSettings
+from detector.events import EventWindow, RmsEventDetector
 from detector.live_sequence import LiveSequenceSession
-from detector.streaming import StreamingRmsDetector
+from detector.onset_matcher import TemplateOnsetMatcher
+from detector.streaming import StreamStep, StreamingRmsDetector
 from encounter.sequence import SequenceState
+from encounter.vog_oracles import OracleId
+from logging_ext.recognition_logger import RecognitionRecorder
 from tests.verification_helpers import RowsClassifier, rows_for
 from tests.unit.test_confidence import ranking
+from tests.unit.test_onset_matcher import classifier as onset_classifier
 
 RATE = 48000
 
@@ -37,6 +42,210 @@ def chunks(values, size):
         yield values[start:start + size]
 
 
+class ActiveMatcher:
+    sample_rate = RATE
+    channels = 2
+    origin_frame = 0
+    lookback_frames = 1
+    retained_frames = 0
+    pristine = True
+
+    def feed(self, samples, cancel=None):
+        return ()
+
+    def finish(self, cancel=None):
+        return ()
+
+
+class ScheduledLiveDetector:
+    def __init__(self, windows):
+        self.windows = tuple(windows)
+
+    def feed(self, samples, cancel=None):
+        for window in self.windows:
+            yield StreamStep(
+                window.onset_frame, False, True,
+                onset_frame=window.onset_frame,
+            )
+            yield StreamStep(
+                window.end_frame, True, False, window=window,
+            )
+
+
+def scheduled_live_windows(specs):
+    cue = AudioClip(tone(), RATE)
+    result = []
+    for spec in specs:
+        seconds, matched, *remainder = spec
+        reason = remainder[0] if remainder else ""
+        onset = round(seconds * RATE)
+        result.append(EventWindow(
+            cue, onset, onset + cue.frame_count,
+            onset, onset + cue.frame_count,
+            reason=reason, matched=matched,
+        ))
+    return tuple(result)
+
+
+def run_scheduled_live(
+    monkeypatch, raws, specs, recognition=None, recorder=None,
+):
+    import detector.live_sequence as module
+
+    matcher = ActiveMatcher()
+    monkeypatch.setattr(
+        module, "build_optional_onset_matcher",
+        lambda *args, **kwargs: matcher,
+    )
+    classifier = RowsClassifier(rows_for("CONFIRMED"))
+    classifier.rows = tuple(raws)
+    classifier.cursor = 0
+    session = LiveSequenceSession(
+        classifier, RATE, 2, "scheduled", recognition=recognition,
+        recorder=recorder,
+    )
+    windows = scheduled_live_windows(specs)
+    session.detector = ScheduledLiveDetector(windows)
+    duration = windows[-1].end_frame / RATE + .5
+    updates = session.feed(quiet(duration))
+    return session, updates
+
+
+def test_live_event_log_records_matcher_provenance(tmp_path, monkeypatch):
+    recorder = RecognitionRecorder(
+        tmp_path/"logs", LoggingSettings(uncertain_audio=False),
+    )
+    run_scheduled_live(
+        monkeypatch,
+        (ranking(oracle=OracleId.L1),),
+        ((.4, True),),
+        recorder=recorder,
+    )
+    payload = json.loads(
+        recorder.events.path.read_text(encoding="utf-8").splitlines()[0]
+    )
+
+    assert payload["onset_detection"] == {
+        "matched": True, "candidate": None, "score": None, "margin": None,
+    }
+
+
+def test_live_onset_matcher_is_optional_for_stubs_and_active_for_templates():
+    legacy = LiveSequenceSession(
+        RowsClassifier(rows_for("CONFIRMED")), RATE, 2, "legacy",
+    )
+    assert legacy.detector.onset_matcher is None
+
+    source, _ = onset_classifier(RATE)
+    current = LiveSequenceSession(source, RATE, 2, "templates")
+    assert isinstance(current.detector.onset_matcher, TemplateOnsetMatcher)
+    current.feed(quiet(.1))
+    assert current.detector.onset_matcher.retained_frames > 0
+
+
+def test_live_matcher_mode_ignores_rms_low_but_keeps_matched_low_position(
+        monkeypatch):
+    session, _ = run_scheduled_live(
+        monkeypatch,
+        (
+            ranking(oracle=OracleId.L1),
+            ranking(.83, .82, OracleId.R3),
+            ranking(.83, .82, OracleId.R3),
+            ranking(oracle=OracleId.L2),
+        ),
+        ((.4, False), (.9, False), (1.4, True), (1.9, False)),
+    )
+    snapshot = session.engine.snapshot()
+
+    assert snapshot.ignored_events == 1
+    assert [item.oracle for item in snapshot.pass1] == [
+        OracleId.L1, None, OracleId.L2,
+    ]
+    assert snapshot.pass1[1].detection.status == "LOW"
+
+
+def test_live_matcher_mode_armed_ignores_unmatched_low_but_starts_matched_low(
+        monkeypatch):
+    session, updates = run_scheduled_live(
+        monkeypatch,
+        (
+            ranking(.83, .82, OracleId.R3),
+            ranking(.83, .82, OracleId.R3),
+        ),
+        ((.4, False), (.9, True)),
+    )
+    detections = [item.detection for item in updates if item.detection is not None]
+    snapshot = session.engine.snapshot()
+
+    assert [item.status for item in detections] == ["LOW", "LOW"]
+    assert snapshot.ignored_events == 1
+    assert [item.oracle for item in snapshot.pass1] == [None]
+    assert not snapshot.pass2
+
+
+def test_live_restarts_false_singleton_without_duplicate_poisoning(monkeypatch):
+    order = (
+        OracleId.L3,
+        OracleId.L1, OracleId.L2, OracleId.L3,
+        OracleId.L1, OracleId.L2, OracleId.L3,
+    )
+    session, updates = run_scheduled_live(
+        monkeypatch,
+        tuple(ranking(oracle=item) for item in order),
+        (
+            (.4, False),
+            (2.8, True), (3.4, True), (4.0, True),
+            (6.2, True), (6.8, True), (7.4, True),
+        ),
+        RecognitionSettings(duplicate_cooldown=10),
+    )
+    confirmed = next(result.snapshot for result in updates if result.snapshot.confirmed)
+    detections = [result.detection for result in updates if result.detection is not None]
+
+    assert confirmed.ignored_events == 1
+    assert [item.oracle for item in confirmed.pass1] == [
+        OracleId.L1, OracleId.L2, OracleId.L3,
+    ]
+    assert [item.oracle for item in confirmed.pass2] == [
+        OracleId.L1, OracleId.L2, OracleId.L3,
+    ]
+    assert len(detections) == 7
+    assert all(not detection.duplicate for detection in detections[1:])
+    assert len(session._checksums) == 6
+    assert any(
+        transition.reason == "PASS_1_RESTARTED"
+        for transition in confirmed.transitions
+    )
+
+
+@pytest.mark.parametrize(
+    "reason", ["CLIPPED_EVENT", "SHORT_EVENT", "EVENT_LIMIT"],
+)
+def test_live_structural_window_does_not_poison_same_oracle_duplicate_history(
+        monkeypatch, reason):
+    session, updates = run_scheduled_live(
+        monkeypatch,
+        (
+            ranking(oracle=OracleId.L2),
+            ranking(oracle=OracleId.L1),
+            ranking(oracle=OracleId.L1),
+        ),
+        ((.4, True), (.9, True, reason), (1.4, True)),
+        RecognitionSettings(duplicate_cooldown=10),
+    )
+    detections = [item.detection for item in updates if item.detection is not None]
+    structural, following = detections[1:]
+
+    assert structural.reason == reason
+    assert structural.status == "REJECTED"
+    assert structural.oracle is None
+    assert following.oracle == OracleId.L1
+    assert not following.duplicate
+    assert [item.oracle for item in session.engine.snapshot().pass1] == [
+        OracleId.L2, None, OracleId.L1,
+    ]
+
+
 @pytest.mark.parametrize("size", [17, 960, 4093, 24000])
 def test_stream_chunk_boundaries_match_finite_detector(size):
     values = round_audio()
@@ -49,6 +258,39 @@ def test_stream_chunk_boundaries_match_finite_detector(size):
             second.start_frame, second.end_frame, second.onset_frame, second.signal_end_frame, second.reason)
         np.testing.assert_array_equal(first.clip.samples, second.clip.samples)
 
+
+@pytest.mark.parametrize("size", [17, 960, 4093, 24000])
+def test_pre_warmup_event_releases_at_fixed_quiet_level_in_finite_and_live(size):
+    quiet_frames = round(RATE * .9)
+    phase = np.arange(quiet_frames)
+    low_background = (
+        .0071 * np.sin(2 * np.pi * 330 * phase / RATE)
+    ).astype(np.float32)
+    low_background = np.repeat(low_background[:, None], 2, axis=1)
+    values = np.concatenate((tone(.1), low_background))
+
+    finite = list(RmsEventDetector().detect(AudioClip(values, RATE)))
+    detector = StreamingRmsDetector(RATE, 2)
+    live = [
+        step.window
+        for part in chunks(values, size)
+        for step in detector.feed(part)
+        if step.window is not None
+    ]
+    live.extend(
+        step.window for step in detector.finish()
+        if step.window is not None
+    )
+
+    expected_signal_end = round(RATE * .1)
+    expected_end = expected_signal_end + round(
+        RATE * RmsEventDetector().release_seconds
+    )
+    assert len(finite) == len(live) == 1
+    assert finite[0].signal_end_frame == live[0].signal_end_frame == expected_signal_end
+    assert finite[0].end_frame == live[0].end_frame == expected_end
+    assert finite[0].reason == live[0].reason == "CLIPPED_EVENT"
+    np.testing.assert_array_equal(finite[0].clip.samples, live[0].clip.samples)
 
 def test_long_signal_emits_one_rejection_and_retains_bounded_audio():
     detector = StreamingRmsDetector(RATE, 2)
