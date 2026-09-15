@@ -67,7 +67,7 @@ class SettingsPage(QWidget):
         self._number(recognition, "audio.internal_sample_rate", "内部サンプルレート（Hz）", 8000, 192000, integer=True)
         labels = {
             "waveform_weight": "波形の重み", "spectrum_weight": "スペクトルの重み",
-            "detection_threshold": "音の検出しきい値", "confidence_threshold": "採用スコア",
+            "detection_threshold": "固定検出しきい値（自動調整の上限）", "confidence_threshold": "採用スコア",
             "high_confidence_threshold": "高信頼スコア", "low_score_threshold": "低スコアの境界",
             "margin_threshold": "採用に必要な候補差", "high_margin_threshold": "高信頼に必要な候補差",
             "duplicate_cooldown": "重複を抑制する時間（秒）",

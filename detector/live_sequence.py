@@ -8,7 +8,9 @@ from audio.event import EventContext
 from audio.operations import check_cancel
 from audio.sources import ClipSource
 from config.schema import RecognitionSettings, SequenceSettings
-from detector.confidence import ConfidenceEngine, ConfidenceLevel
+from detector.confidence import (
+    ConfidenceEngine, ConfidenceLevel, can_start_presentation,
+)
 from detector.streaming import StreamingRmsDetector
 from encounter.sequence import SequenceEngine, SequenceEntry, SequenceSnapshot, SequenceState
 from replay.analyzer import Analyzer
@@ -93,25 +95,45 @@ class LiveSequenceSession:
                     "live", onset, self.stream_id, window.start_frame, window.end_frame))
                 if window.reason:
                     detection = replace(detection, oracle=None, status=ConfidenceLevel.REJECTED, reason=window.reason)
-                snapshot = self.engine.add(SequenceEntry(detection, raw, end))
-                if before.state != SequenceState.WAIT_PASS_2 and snapshot.state == SequenceState.WAIT_PASS_2:
-                    self.confidence.reset()
-                second=before.state in (SequenceState.WAIT_PASS_2,SequenceState.PASS_2)
-                self.evidence.add(CueEvidence(window.clip,analysis.checksum,detection,raw,before.round_index,
-                    2 if second else 1,len(before.pass2 if second else before.pass1)+1))
-                self._checksums.append(analysis.checksum)
-                self._checksums = self._checksums[-14:]
+                candidate = (
+                    before.state in (SequenceState.PASS_1, SequenceState.PASS_2)
+                    or can_start_presentation(
+                        detection, self.recognition.low_score_threshold
+                    )
+                )
+                if candidate:
+                    snapshot = self.engine.add(SequenceEntry(detection, raw, end))
+                    if before.state != SequenceState.WAIT_PASS_2 and snapshot.state == SequenceState.WAIT_PASS_2:
+                        self.confidence.reset()
+                    second = before.state in (SequenceState.WAIT_PASS_2, SequenceState.PASS_2)
+                    self.evidence.add(CueEvidence(
+                        window.clip, analysis.checksum, detection, raw, before.round_index,
+                        2 if second else 1, len(before.pass2 if second else before.pass1) + 1,
+                    ))
+                    self._checksums.append(analysis.checksum)
+                    self._checksums = self._checksums[-14:]
+                else:
+                    snapshot = self.engine.ignore(end)
                 notices = []
                 if self.recorder:
-                    second = before.state in (SequenceState.WAIT_PASS_2, SequenceState.PASS_2)
-                    saved = self.recorder.record(detection, raw, window.clip, analysis.checksum, cancel,
-                        sequence={"round": before.round_index, "pass": 2 if second else 1,
-                                  "index": len(before.pass2 if second else before.pass1) + 1,
-                                  "state": snapshot.state.value, "reason": snapshot.reason})
+                    sequence_context = None
+                    if candidate:
+                        second = before.state in (SequenceState.WAIT_PASS_2, SequenceState.PASS_2)
+                        sequence_context = {
+                            "round": before.round_index,
+                            "pass": 2 if second else 1,
+                            "index": len(before.pass2 if second else before.pass1) + 1,
+                            "state": snapshot.state.value,
+                            "reason": snapshot.reason,
+                        }
+                    saved = self.recorder.record(
+                        detection, raw, window.clip, analysis.checksum, cancel,
+                        sequence=sequence_context,
+                    )
                     notices.extend(saved.notices)
                 if snapshot.state in (SequenceState.VERIFY, SequenceState.UNCERTAIN):
                     snapshot = self.engine.verify(self.recognition, cancel)
-                    notices.extend(self.evidence.save_problem(snapshot,self.recorder,cancel))
+                    notices.extend(self.evidence.save_problem(snapshot, self.recorder, cancel))
                     notices.extend(self._summary(snapshot, cancel))
                     self._blocked = snapshot.state == SequenceState.UNCERTAIN
                 publish(snapshot, detection, raw, notices)

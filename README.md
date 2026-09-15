@@ -185,7 +185,7 @@ Live の「直近音声の順序を解析」も、処理開始時にコピーし
 補正した順序は INFERRED（要確認）、決められない位置は MISMATCH / CHECK です。不一致・重複と元の候補を残します。
 unknown は位置を残し、欠落や間隔不足は UNCERTAIN にします。
 提供された個別の実 Oracle 音声を2回提示に組み、全5ラウンドの分離を確認しました。
-実戦での提示間隔・音の重なりを含む通し録音は未検証です。
+ラウンド開始音と両PASSを含む27.09秒の実録音1件で、中央→右1→右2の一致と確定を確認しました。
 
 ## 設定・ログ保存場所
 
@@ -207,7 +207,7 @@ unknown は位置を残し、欠落や間隔不足は UNCERTAIN にします。
 - 退避できなければ原本を保持し、読み込み・保存のエラーを GUI に表示します。
 - 診断ログは 5 MiB × 最大 4 ファイルです。
 - 比較には waveform_weight / spectrum_weight / template_aggregation / top_n / bandpass を使用します。
-- confidence 閾値は採用判定、detection_threshold / sequence.pass_gap / event_timeout は順序解析に使用します。
+- confidence 閾値は採用判定、detection_threshold は自動環境音追従の上限、sequence.pass_gap / event_timeout は順序解析に使用します。
 - lockout_duration / silence_duration は FSM の確定後遷移で使用します。
 - candidate_top_n / max_corrections / inference_margin / reconstruction_margin は候補保存・推定に使用します。
 - 認識ログがONなら logs/sessions/ にイベントと独立したPASSのJSONLを保存します。
@@ -254,7 +254,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\verify.ps1
 .\.venv\Scripts\python.exe -m pip check
 ```
 
-Python 3.14.6 で **724 passed**（513.56秒）、依存関係の確認も成功しています。
+Python 3.14.6 で **734 passed**（493.66秒）、依存関係の確認も成功しています。
 自動テストは実デバイス・ゲーム・VoiceMeeter の起動を必要としません。
 うち20件は任意のローカル samples/A.wav〜G.wav を使い、音声がない環境では skip します。
 GUI は offscreen、音声は実スレッドで動くデバイス代替を用いて確認します。
@@ -285,6 +285,8 @@ Phase 16は設定の保存・復元、Hotkey競合・編集時の解除、手動
 Windowsの専用ウィンドウでHotkey受信・長押し抑制・非アクティブ表示、終了時の4workerと全登録の解放を確認しました。
 2026-09-15の非戦闘Oracle録音（7.16秒）では、従来1つのEVENT_LIMITになった3音をR2 / L1 / L2へ分離し、
 Replayと3種類のLive分割で全音HIGH、同じ順序になることを確認しました。判定閾値0.025と登録音は変更していません。
+同日の27.09秒の通し録音では、固定しきい値未満だった両PASSを中央 / 右1 / 右2として確定し、
+開始前の効果音4候補はPASS位置に数えず診断記録へ残すことを確認しました。
 Destiny 2実行中のOverlay、物理的な複数モニター変更、長時間実戦の性能は未確認です。
 提供音声に分類誤りを注入した8ケースは、推定・同点・弱い根拠を確定表示にしません。
 戦闘音・会話・効果音を含む実戦の認識率、物理的な切断・再接続は未検証です。

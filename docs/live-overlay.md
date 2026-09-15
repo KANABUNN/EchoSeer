@@ -110,7 +110,7 @@ checksum_scope=ordered_cue_checksumsは保存した候補区間のchecksumを順
 結果は.runtime/live-evaluation/report.jsonです。
 7ケースの連続LiveとReplayは元の列が一致し、正常列だけCONFIRMEDになります。
 音声と登録テンプレートは同じ元録音で、提示間隔と無音は人工条件です。
-実戦の通し録音、独立録音、会話・効果音や残響の重なりによる精度は未検証です。
+ラウンド開始音と両PASSを含む実録音1件は確定まで確認済みです。戦闘音・会話が重なる複数録音での精度は未検証です。
 
 Windowsのテスト用borderless windowで、クリック透過・位置調整・最前面・非アクティブ表示を確認しました。
 100% / 125% / 150%のQt表示倍率、7個の列とマップ、画面内復元、終了時の全4worker解放を確認しています。

@@ -37,7 +37,7 @@ Replay の「認識結果」が、信頼度判定後に採用した Oracle で�
 | duplicate_cooldown | 0.45 | 同じ Oracle の重複抑制時間。0 で無効 |
 
 これらは初期値であり、実戦の誤検出率から校正した値ではありません。
-detection_threshold は Phase 7 の有限音声のイベント切り出しで使用します。
+detection_threshold はイベント開始RMSの固定値兼、自動環境音追従の上限として使用します。
 手順と時間設定は [sequence.md](sequence.md) を参照してください。
 
 ## Live と Replay の時刻

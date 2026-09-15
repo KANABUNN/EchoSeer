@@ -13,6 +13,7 @@ from detector.live_sequence import LiveSequenceSession
 from detector.streaming import StreamingRmsDetector
 from encounter.sequence import SequenceState
 from tests.verification_helpers import RowsClassifier, rows_for
+from tests.unit.test_confidence import ranking
 
 RATE = 48000
 
@@ -219,3 +220,45 @@ def test_live_sequence_accepts_retriggered_cues_in_chronological_order():
     assert [item.detection.context.timestamp for item in confirmed.pass1] == sorted(
         item.detection.context.timestamp for item in confirmed.pass1
     )
+
+
+@pytest.mark.parametrize("size", [17, 960, 4093, 24000])
+def test_streaming_adaptive_low_level_boundaries_match_finite_detector(size):
+    floor = tone(.4) * (.001 / .15)
+    cue = tone(.18) * (.02 / .15)
+    tail = tone(.9) * (.006 / .15)
+    ending = tone(.2) * (.001 / .15)
+    values = np.concatenate([floor, cue, tail, cue, tail, cue, ending])
+    finite = list(RmsEventDetector().detect(AudioClip(values, RATE)))
+    detector = StreamingRmsDetector(RATE, 2)
+    actual = [
+        step.window
+        for part in chunks(values, size)
+        for step in detector.feed(part)
+        if step.window
+    ]
+    assert len(actual) == len(finite) == 3
+    for first, second in zip(actual, finite):
+        assert (
+            first.start_frame, first.end_frame, first.onset_frame,
+            first.signal_end_frame, first.reason,
+        ) == (
+            second.start_frame, second.end_frame, second.onset_frame,
+            second.signal_end_frame, second.reason,
+        )
+        np.testing.assert_array_equal(first.clip.samples, second.clip.samples)
+
+
+def test_live_ignores_below_low_prelude_before_a_valid_presentation():
+    classifier = RowsClassifier(rows_for("CONFIRMED"))
+    classifier.rows = (ranking(.2, .1), *classifier.rows)
+    values = np.concatenate([quiet(.5), tone(), quiet(.5), round_audio()])
+    session = LiveSequenceSession(classifier, RATE, 2, "prelude")
+    updates = [
+        result
+        for part in chunks(values, 4093)
+        for result in session.feed(part)
+    ]
+    confirmed = next(result.snapshot for result in updates if result.snapshot.confirmed)
+    assert [item.value for item in confirmed.final_sequence] == ["L1", "L2", "L3"]
+    assert confirmed.ignored_events == 1

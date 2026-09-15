@@ -217,3 +217,12 @@ def test_invalid_settings(field,value):
 @pytest.mark.parametrize("round_index",[0,6,True])
 def test_invalid_round_is_rejected(round_index):
     with pytest.raises(ValueError):SequenceEngine().arm(round_index=round_index)
+
+
+def test_explicitly_ignored_sound_does_not_start_a_pass():
+    engine = SequenceEngine()
+    engine.arm()
+    result = engine.ignore(1)
+    assert result.state == SequenceState.ARMED
+    assert not result.pass1 and not result.pass2
+    assert result.ignored_events == 1

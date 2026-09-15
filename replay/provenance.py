@@ -34,7 +34,7 @@ def recognition_profile(classifier, recognition, cancel=None):
             templates.append({"oracle": OracleId(sample.oracle).value, "sample_id": sample.sample_id,
                               "native_checksum": audio_checksum(sample.clip)})
         issues = []
-    return {"engine": "waveform-spectrum-v1", "sample_rate": classifier.sample_rate,
+    return {"engine": "adaptive-rms-waveform-spectrum-v2", "sample_rate": classifier.sample_rate,
             "recognition": asdict(recognition),
             "classifier": {key:getattr(classifier,key,None) for key in ("aggregation","top_n","waveform_weight","spectrum_weight")},
             "bandpass": asdict(classifier.bandpass) if getattr(classifier,"bandpass",None) is not None else None,

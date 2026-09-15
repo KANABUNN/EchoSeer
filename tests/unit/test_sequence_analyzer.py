@@ -108,3 +108,11 @@ def test_summary_write_failure_does_not_lose_passes(tmp_path,monkeypatch):
 def test_excess_duration_is_refused_before_classification():
     clip=AudioClip(np.zeros((8000*121,1),np.float32),8000)
     with pytest.raises(AudioDataError):analyze(StubClassifier(),clip)
+
+
+def test_below_low_sound_events_do_not_consume_sequence_positions():
+    result = analyze(StubClassifier(ranking(.2, .1)))
+    assert len(result.traces) == 6
+    assert not result.snapshot.pass1 and not result.snapshot.pass2
+    assert result.snapshot.ignored_events == 6
+    assert result.snapshot.reason == "NO_EVENTS"

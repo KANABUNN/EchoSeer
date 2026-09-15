@@ -113,3 +113,33 @@ def test_invalid_retrigger_settings(retrigger_seconds, retrigger_ratio):
         RmsEventDetector(
             retrigger_seconds=retrigger_seconds, retrigger_ratio=retrigger_ratio
         )
+
+
+def test_adaptive_noise_floor_detects_a_cue_below_the_fixed_threshold():
+    original = audio([(.4, .001), (.2, .02), (.3, .001)])
+    events = list(RmsEventDetector().detect(original))
+    assert len(events) == 1 and not events[0].reason
+    assert events[0].onset_frame / original.sample_rate == pytest.approx(.4, abs=.02)
+
+
+def test_local_retrigger_splits_quiet_cues_with_audible_residual_tails():
+    original = audio([
+        (.4, .001),
+        (.18, .02), (.9, .006),
+        (.18, .02), (.9, .006),
+        (.18, .02), (.2, .001),
+    ])
+    events = list(RmsEventDetector().detect(original))
+    assert len(events) == 3
+    assert not any(event.reason for event in events)
+    assert [event.onset_frame / original.sample_rate for event in events] == pytest.approx(
+        [.4, 1.48, 2.56], abs=.02
+    )
+
+
+def test_local_retrigger_does_not_split_a_strong_internal_rise_before_one_second():
+    original = audio([
+        (.4, .001), (.18, .02), (.66, .006), (.18, .02), (.2, .001),
+    ])
+    events = list(RmsEventDetector().detect(original))
+    assert len(events) == 1 and not events[0].reason

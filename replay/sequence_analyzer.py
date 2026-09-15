@@ -9,7 +9,9 @@ from audio.operations import check_cancel
 from audio.sources import ClipSource
 from config.schema import RecognitionSettings, SequenceSettings
 from detector.classifier import ClassificationResult, OracleClassifier
-from detector.confidence import ConfidenceEngine, ConfidenceLevel, DetectionResult
+from detector.confidence import (
+    ConfidenceEngine, ConfidenceLevel, DetectionResult, can_start_presentation,
+)
 from detector.events import RmsEventDetector
 from encounter.sequence import SequenceEngine, SequenceSnapshot, SequenceEntry, SequenceState
 from logging_ext.recognition_logger import RecognitionRecorder
@@ -80,21 +82,45 @@ class ReplaySequenceAnalyzer:
             detection = confidence.evaluate(classification, context)
             if window.reason:
                 detection = replace(detection, oracle=None, status=ConfidenceLevel.REJECTED, reason=window.reason)
-            snapshot = engine.add(SequenceEntry(detection, classification, signal_end))
-            if before.state != SequenceState.WAIT_PASS_2 and snapshot.state == SequenceState.WAIT_PASS_2:
-                # PASS2 repeats PASS1; temporal duplicate history belongs to one presentation.
-                confidence.reset()
-            traces.append(CueTrace(window.start_frame, window.end_frame, window.onset_frame,
-                                   window.signal_end_frame, detection, classification))
-            pass_number = 2 if before.state in (SequenceState.WAIT_PASS_2,SequenceState.PASS_2) else 1
-            index = len(before.pass2 if pass_number==2 else before.pass1)+1
-            if self.recorder:
-                evidence.add(CueEvidence(window.clip,cue_analysis.checksum,detection,classification,round_index,pass_number,index))
-                pass_number = 2 if before.state in (SequenceState.WAIT_PASS_2, SequenceState.PASS_2) else 1
+            candidate = (
+                before.state in (SequenceState.PASS_1, SequenceState.PASS_2)
+                or can_start_presentation(
+                    detection, self.recognition.low_score_threshold
+                )
+            )
+            sequence_context = None
+            if candidate:
+                snapshot = engine.add(SequenceEntry(detection, classification, signal_end))
+                if before.state != SequenceState.WAIT_PASS_2 and snapshot.state == SequenceState.WAIT_PASS_2:
+                    # PASS2 repeats PASS1; temporal duplicate history belongs to one presentation.
+                    confidence.reset()
+                pass_number = (
+                    2 if before.state in (SequenceState.WAIT_PASS_2, SequenceState.PASS_2) else 1
+                )
                 index = len(before.pass2 if pass_number == 2 else before.pass1) + 1
-                persisted = self.recorder.record(detection, classification, window.clip, cue_analysis.checksum, cancel,
-                                                sequence={"round": round_index, "pass": pass_number, "index": index,
-                                                          "state": snapshot.state.value, "reason": snapshot.reason})
+                sequence_context = {
+                    "round": round_index,
+                    "pass": pass_number,
+                    "index": index,
+                    "state": snapshot.state.value,
+                    "reason": snapshot.reason,
+                }
+                if self.recorder:
+                    evidence.add(CueEvidence(
+                        window.clip, cue_analysis.checksum, detection, classification,
+                        round_index, pass_number, index,
+                    ))
+            else:
+                snapshot = engine.ignore(signal_end)
+            traces.append(CueTrace(
+                window.start_frame, window.end_frame, window.onset_frame,
+                window.signal_end_frame, detection, classification,
+            ))
+            if self.recorder:
+                persisted = self.recorder.record(
+                    detection, classification, window.clip, cue_analysis.checksum, cancel,
+                    sequence=sequence_context,
+                )
                 notices.extend(persisted.notices)
             if progress:
                 progress(snapshot)

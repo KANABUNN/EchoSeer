@@ -125,6 +125,14 @@ class ConfidenceEngine:
                                best.spectrum_score, second.oracle if second else None,
                                second.score if second else None, margin, status, reason, duplicate)
 
+
+def can_start_presentation(result: DetectionResult, low_score_threshold: float) -> bool:
+    """Only a plausible Oracle match may start a presentation."""
+    return (
+        result.confidence is not None
+        and _at_least(result.confidence, low_score_threshold)
+    )
+
 def _at_least(value: float, threshold: float) -> bool:
     # Decimal boundaries may lose an ulp when subtracting scores or timestamps.
     return value >= threshold or math.isclose(value, threshold, rel_tol=0, abs_tol=1e-12)

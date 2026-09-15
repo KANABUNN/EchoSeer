@@ -226,6 +226,12 @@ class SequenceEngine:
                 self._set(SequenceState.VERIFY, "AWAITING_VERIFICATION")
         return self.snapshot()
 
+    def ignore(self, now: float) -> SequenceSnapshot:
+        """Record a classified non-Oracle sound without consuming a position."""
+        self._clock(now)
+        self._ignored += 1
+        return self.snapshot()
+
     def invalidate(self, now: float, reason: str) -> SequenceSnapshot:
         """An interrupted live source cannot retain a confirmed sequence."""
         self._clock(now)
