@@ -87,3 +87,29 @@ def test_excess_events_are_refused(monkeypatch):
 def test_cancel_before_audio_processing():
     cancel=Event();cancel.set()
     with pytest.raises(OperationCancelled):list(RmsEventDetector().detect(audio([(1,0)]),cancel))
+
+
+def test_strong_retrigger_splits_overlapping_decay_without_release_silence():
+    original = audio([(.2, 0), (.16, .2), (.1, .025), (.16, .2), (.2, 0)])
+    events = list(RmsEventDetector().detect(original))
+    assert len(events) == 2
+    assert not any(event.reason for event in events)
+    assert events[0].end_frame == events[1].onset_frame
+    assert events[1].start_frame < events[1].onset_frame
+    assert events[0].signal_end_frame == events[1].onset_frame
+
+
+def test_small_rise_in_decay_does_not_split_an_event():
+    original = audio([(.2, 0), (.16, .2), (.1, .025), (.08, .04), (.2, 0)])
+    events = list(RmsEventDetector().detect(original))
+    assert len(events) == 1 and not events[0].reason
+
+
+@pytest.mark.parametrize("retrigger_seconds,retrigger_ratio", [
+    (.01, 1.5), (.12, 1.5), (.06, 1.0), (.06, 4.1),
+])
+def test_invalid_retrigger_settings(retrigger_seconds, retrigger_ratio):
+    with pytest.raises(ValueError):
+        RmsEventDetector(
+            retrigger_seconds=retrigger_seconds, retrigger_ratio=retrigger_ratio
+        )

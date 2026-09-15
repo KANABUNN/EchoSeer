@@ -32,13 +32,18 @@ class StreamingRmsDetector:
         self.block = max(1, round(sample_rate * self.settings.block_seconds))
         self.pre_frames = round(sample_rate * self.settings.pre_roll)
         self.release = round(sample_rate * self.settings.release_seconds)
+        self.retrigger = round(sample_rate * self.settings.retrigger_seconds)
+        self.quiet_level = max(self.settings.threshold * .4, 1e-6)
+        self.retrigger_level = max(
+            self.settings.threshold * self.settings.retrigger_ratio, 1e-6
+        )
         self.limit = min(round(sample_rate * self.settings.max_window_seconds),
                          MAX_EVENT_BYTES // (4 * channels))
         self._first = self._position = start_frame
         self._tail = np.empty((0, channels), dtype=np.float32)
         self._pre = deque(maxlen=max(1, (self.pre_frames + self.block - 1) // self.block))
         self._parts = []
-        self._onset = self._start = self._quiet = None
+        self._onset = self._start = self._quiet = self._retrigger = None
         self._stored = 0
         self._suppress = False
 
@@ -55,11 +60,25 @@ class StreamingRmsDetector:
         window = EventWindow(AudioClip(samples, self.rate), self._start,
                              self._start + len(samples), self._onset, signal_end, reason)
         self._parts, self._stored = [], 0
-        self._onset = self._start = self._quiet = None
+        self._onset = self._start = self._quiet = self._retrigger = None
         self._pre.clear()
         for offset in range(max(0, len(samples) - self.pre_frames), len(samples), self.block):
             self._pre.append(samples[offset:offset + self.block].copy())
         return window
+
+    def _begin(self, start: int, block: np.ndarray) -> int:
+        prefix = (
+            np.concatenate(tuple(self._pre))[-self.pre_frames:]
+            if self._pre and self.pre_frames
+            else np.empty((0, self.channels), dtype=np.float32)
+        )
+        self._onset = start
+        self._start = start - len(prefix)
+        self._parts = [prefix.copy(), block.copy()]
+        self._stored = len(prefix) + len(block)
+        self._quiet = self._retrigger = None
+        self._pre.clear()
+        return start
 
     def feed(self, samples, cancel: Event | None = None) -> Iterator[StreamStep]:
         values = np.asarray(samples, dtype=np.float32)
@@ -75,7 +94,7 @@ class StreamingRmsDetector:
             self._position = end
             centered = block - np.mean(block, axis=0, dtype=np.float64)
             rms = float(np.sqrt(np.mean(np.square(centered))))
-            quiet = rms <= max(self.settings.threshold * .4, 1e-6)
+            quiet = rms <= self.quiet_level
             onset, window = None, None
             if self._suppress:
                 self._quiet = start if quiet and self._quiet is None else self._quiet
@@ -86,28 +105,43 @@ class StreamingRmsDetector:
                     self._pre.clear()
             elif self._onset is None:
                 if rms > 1e-6 and rms >= self.settings.threshold:
-                    onset = self._onset = start
-                    prefix = np.concatenate(tuple(self._pre))[-self.pre_frames:] if self._pre and self.pre_frames else np.empty((0, self.channels), dtype=np.float32)
-                    self._start = start - len(prefix)
-                    self._parts = [prefix.copy(), block.copy()]
-                    self._stored = len(prefix) + len(block)
-                    self._quiet = None
+                    onset = self._begin(start, block)
                 else:
                     self._pre.append(block.copy())
             else:
-                remaining = self.limit - self._stored
-                if remaining > 0:
-                    part = block[:remaining].copy()
-                    self._parts.append(part)
-                    self._stored += len(part)
-                if quiet:
-                    if self._quiet is None:
-                        self._quiet = start
-                    if end - self._quiet >= self.release:
-                        window = self._window(end, self._quiet)
+                retriggered = (
+                    self._retrigger is not None
+                    and start - self._retrigger >= self.retrigger
+                    and rms >= self.retrigger_level
+                )
+                if retriggered:
+                    window = self._window(start, start)
+                    # Close the previous cue before announcing the new onset to
+                    # keep sequence state transitions in chronological order.
+                    yield StreamStep(start, False, True, window=window)
+                    window = None
+                    onset = self._begin(start, block)
                 else:
-                    self._quiet = None
-                if window is None and end - self._start >= self.limit:
-                    window = self._window(end, self._quiet if self._quiet is not None else end, "EVENT_LIMIT")
-                    self._suppress = True
+                    remaining = self.limit - self._stored
+                    if remaining > 0:
+                        part = block[:remaining].copy()
+                        self._parts.append(part)
+                        self._stored += len(part)
+                    if self.quiet_level < rms < self.settings.threshold:
+                        if self._retrigger is None:
+                            self._retrigger = start
+                    else:
+                        self._retrigger = None
+                    if quiet:
+                        if self._quiet is None:
+                            self._quiet = start
+                        if end - self._quiet >= self.release:
+                            window = self._window(end, self._quiet)
+                    else:
+                        self._quiet = None
+                    if window is None and end - self._start >= self.limit:
+                        window = self._window(
+                            end, self._quiet if self._quiet is not None else end, "EVENT_LIMIT"
+                        )
+                        self._suppress = True
             yield StreamStep(end, quiet, self._onset is not None or self._suppress, onset, window)

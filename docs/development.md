@@ -579,3 +579,21 @@ Destiny 2実行中の操作は未確認。Phase 17・18は保留。
 参照： [Windows RegisterHotKey](https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-registerhotkey) /
 [Qt Native Event Filter](https://doc.qt.io/qtforpython-6/PySide6/QtCore/QAbstractNativeEventFilter.html)。
 PySide6の2要素の戻り値は公式6.11実装のreturn-native-eventfilter-conversionでも確認した。
+
+## 非戦闘の実録音フィードバック（2026-09-15）
+
+7.16秒のstereo 44100 Hz実録音では、RMS開始は1.10秒に検出できていたが、
+残響が終了閾値へ戻らず3音を最大3秒の1窓に連結し、EVENT_LIMITで棄却していた。
+
+有限RmsEventDetectorとStreamingRmsDetectorへ再発音境界を追加した。
+開始閾値未満かつ終了閾値より大きい残響が60ms以上続き、
+開始閾値の1.5倍以上へ再上昇したブロックで直前窓を閉じ、新しい窓へ60msのpre-rollを付ける。
+Liveでは前の窓をFSMへ渡してから同じ境界の新onsetを通知し、時系列を維持する。
+終了閾値以下の短い無音と弱い再上昇は従来どおり統合する。
+
+既定設定のまま1.10 / 2.42 / 3.72秒の3窓となり、登録音との照合は
+R2 0.969088 / L1 0.964674 / L2 0.960169です。すべてHIGHで、
+Replayと3種類のLiveチャンク境界が一致した。元録音・設定・登録音は変更していない。
+重なり・弱い再上昇・短い無音・有限/Live一致・FSM順序の新規11件を追加し、
+全724件（513.56秒）とpip checkが成功した。
+この1件に手動正解はなく、戦闘音を含む精度・誤検出率の改善測定は未完了。

@@ -162,3 +162,60 @@ def test_lockout_ignores_combat_sound_and_advances_after_continuous_quiet():
     assert snapshot.state == SequenceState.ARMED and snapshot.round_index == 2
     assert not snapshot.pass1 and not snapshot.pass2 and snapshot.verification is None
     assert len(session.engine.round_history) == 1
+
+
+@pytest.mark.parametrize("size", [17, 960, 4093, 24000])
+def test_streaming_retrigger_matches_overlapping_finite_events(size):
+    residual = (.025 * np.sin(
+        2 * np.pi * 880 * np.arange(round(RATE * .1)) / RATE
+    )).astype(np.float32)
+    residual = np.repeat(residual[:, None], 2, axis=1)
+    values = np.concatenate([quiet(.2), tone(.16), residual, tone(.16), quiet(.2)])
+    finite = list(RmsEventDetector().detect(AudioClip(values, RATE)))
+    detector = StreamingRmsDetector(RATE, 2)
+    steps = [
+        step
+        for part in chunks(values, size)
+        for step in detector.feed(part)
+    ]
+    actual = [step.window for step in steps if step.window]
+    assert len(actual) == len(finite) == 2
+    for first, second in zip(actual, finite):
+        assert (
+            first.start_frame, first.end_frame, first.onset_frame,
+            first.signal_end_frame, first.reason
+        ) == (
+            second.start_frame, second.end_frame, second.onset_frame,
+            second.signal_end_frame, second.reason
+        )
+        np.testing.assert_array_equal(first.clip.samples, second.clip.samples)
+    split_index = next(index for index, step in enumerate(steps) if step.window is actual[0])
+    assert steps[split_index].onset_frame is None
+    assert steps[split_index + 1].onset_frame == actual[1].onset_frame
+
+def test_live_sequence_accepts_retriggered_cues_in_chronological_order():
+    residual = (.025 * np.sin(
+        2 * np.pi * 880 * np.arange(round(RATE * .1)) / RATE
+    )).astype(np.float32)
+    residual = np.repeat(residual[:, None], 2, axis=1)
+    presentation = np.concatenate([
+        tone(.16), residual, tone(.16), residual, tone(.16), quiet(.2),
+    ])
+    values = np.concatenate([quiet(.5), presentation, quiet(2.4), presentation])
+    session = LiveSequenceSession(
+        RowsClassifier(rows_for("CONFIRMED")), RATE, 2, "overlapping"
+    )
+    updates = [
+        result
+        for part in chunks(values, 4093)
+        for result in session.feed(part)
+    ]
+    confirmed = next(
+        result.snapshot
+        for result in updates
+        if result.snapshot.state == SequenceState.CONFIRMED
+    )
+    assert [item.value for item in confirmed.final_sequence] == ["L1", "L2", "L3"]
+    assert [item.detection.context.timestamp for item in confirmed.pass1] == sorted(
+        item.detection.context.timestamp for item in confirmed.pass1
+    )

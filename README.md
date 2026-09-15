@@ -213,7 +213,7 @@ unknown は位置を残し、欠落や間隔不足は UNCERTAIN にします。
 - 認識ログがONなら logs/sessions/ にイベントと独立したPASSのJSONLを保存します。
 
 設定例は [config.example.json](docs/config.example.json) を参照してください。
-認識閾値やタイミングは調整前の仮値です。
+認識閾値やタイミングは、非戦闘の実録音1件で初回確認した段階です。戦闘音を含む調整は継続します。
 
 ## プロジェクト構造
 
@@ -254,7 +254,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\verify.ps1
 .\.venv\Scripts\python.exe -m pip check
 ```
 
-Python 3.14.6 で **712 passed**（251.20秒）。最終修正は **18 passed**（新規1件を含む）、依存関係の確認も成功しています。
+Python 3.14.6 で **724 passed**（513.56秒）、依存関係の確認も成功しています。
 自動テストは実デバイス・ゲーム・VoiceMeeter の起動を必要としません。
 うち20件は任意のローカル samples/A.wav〜G.wav を使い、音声がない環境では skip します。
 GUI は offscreen、音声は実スレッドで動くデバイス代替を用いて確認します。
@@ -283,9 +283,11 @@ Windowsのテスト用borderless画面でクリック透過・非アクティブ
 Phase 13〜15は提供音声の15ケースで一括評価・設定比較、WindowsのTimeline・手動正解付け・ログReplay・Live固定コピーを確認しました。
 Phase 16は設定の保存・復元、Hotkey競合・編集時の解除、手動再接続・Stopによる中止を追加検証しました。
 Windowsの専用ウィンドウでHotkey受信・長押し抑制・非アクティブ表示、終了時の4workerと全登録の解放を確認しました。
+2026-09-15の非戦闘Oracle録音（7.16秒）では、従来1つのEVENT_LIMITになった3音をR2 / L1 / L2へ分離し、
+Replayと3種類のLive分割で全音HIGH、同じ順序になることを確認しました。判定閾値0.025と登録音は変更していません。
 Destiny 2実行中のOverlay、物理的な複数モニター変更、長時間実戦の性能は未確認です。
 提供音声に分類誤りを注入した8ケースは、推定・同点・弱い根拠を確定表示にしません。
-別録音・会話や効果音を含む実戦の認識率、VoiceMeeter B1 へのゲーム音経路、物理的な切断・再接続は未検証です。
+戦闘音・会話・効果音を含む実戦の認識率、物理的な切断・再接続は未検証です。
 
 ## Troubleshooting
 
